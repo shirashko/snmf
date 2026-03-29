@@ -1,6 +1,10 @@
+import logging
+import math
+
 import torch
 import torch.nn as nn
-import math, torch
+
+logger = logging.getLogger(__name__)
 
 
 # ───────────────────────────────────────────────────────────
@@ -249,14 +253,22 @@ class NMFSemiNMF(nn.Module):
                     num_no_improve += 1
 
                 if verbose and (it % 50 == 0 or num_no_improve == 1):
-                    print(f"Iter {it:4d}: loss={loss.item():.6f}  "
-                          f"(best={best_loss:.6f}, no_improve={num_no_improve})")
+                    logger.info(
+                        "SNMF iter %4d: loss=%.6f (best=%.6f, no_improve=%d)",
+                        it,
+                        loss.item(),
+                        best_loss,
+                        num_no_improve,
+                    )
 
                 # early stopping
                 if num_no_improve >= patience:
                     if verbose:
-                        print(f"Stopping early at iter {it} "
-                              f"(no improvement in {patience} iters)")
+                        logger.info(
+                            "SNMF early stop at iter %d (no improvement in %d iters)",
+                            it,
+                            patience,
+                        )
                     break
         with open("training_summary.log", "a") as logf:
             logf.write(

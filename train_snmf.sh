@@ -42,12 +42,12 @@ python train_snmf.py \
     --rank 100 \
     --mode "mlp_intermediate" \
     --init "svd" \
-    --batch-size 1 \
-    --device "cpu" \
+    --batch-size 8 \
+    --device "auto" \
     --sparsity 0.01 \
     --max-iter 5000 \
     --seed 42 \
-    --output-dir "outputs/snmf_train_results"
+    --output-dir "outputs/snmf_train_results_02"
 
 echo "--------------------------------------------------------"
 echo "SNMF Training Finished"

@@ -89,7 +89,6 @@ def run_snmf(
     activation_matrix = activations.T.to(device)
 
     nmf = NMFSemiNMF(rank, fitting_device=device, sparsity=sparsity)
-    # The NMFSemiNMF.fit usually prints to stdout. We can wrap it if needed.
     nmf.fit(activation_matrix, max_iter=max_iter, patience=patience, verbose=True, init=init)
 
     F = nmf.F_.detach().cpu()  # (d_features, rank)
