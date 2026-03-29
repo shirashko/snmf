@@ -278,6 +278,8 @@ class NMFSemiNMF(nn.Module):
             with torch.no_grad():
                 self.F_.data.copy_(best_F)
                 self.G_.data.copy_(best_G)
+        self.best_loss_ = best_loss
+        self.best_iteration_ = best_it
         self.W = self.G_.detach().clone()
         self.H = self.F_.T
         return self

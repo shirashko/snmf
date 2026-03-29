@@ -5,7 +5,7 @@ import sys
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import  Tuple
+from typing import Dict, Tuple
 
 import torch
 from dotenv import load_dotenv
@@ -73,7 +73,7 @@ def run_snmf(
         patience: int = 1500,
         init: str = "random",
         normalize: bool = False,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, float]:
     """
     Executes Semi-Nonnegative Matrix Factorization on the provided activations.
     """
@@ -90,12 +90,15 @@ def run_snmf(
 
     nmf = NMFSemiNMF(rank, fitting_device=device, sparsity=sparsity)
     nmf.fit(activation_matrix, max_iter=max_iter, patience=patience, verbose=True, init=init)
+    final_loss = float(nmf.best_loss_)
 
     F = nmf.F_.detach().cpu()  # (d_features, rank)
     G = nmf.G_.detach().cpu()  # (n_samples, rank)
 
-    logging.info(f"  Factorization complete. F: {F.shape}, G: {G.shape}")
-    return F, G
+    logging.info(
+        f"  Factorization complete. F: {F.shape}, G: {G.shape}, final best Frobenius loss: {final_loss:.6f}"
+    )
+    return F, G, final_loss
 
 
 def main():
@@ -146,12 +149,13 @@ def main():
         torch.cuda.empty_cache()
 
     # Factorization Phase
+    final_loss_per_layer: Dict[str, float] = {}
     for layer_idx, layer in enumerate(layers):
         logger.info(f"\n>>> Processing Layer {layer} ({layer_idx + 1}/{len(layers)}) <<<")
 
         activations = activations_per_layer[layer_idx]
 
-        F, G = run_snmf(
+        F, G, layer_final_loss = run_snmf(
             activations,
             rank=args.rank,
             device=device,
@@ -160,6 +164,7 @@ def main():
             init=args.init,
             normalize=args.normalize
         )
+        final_loss_per_layer[str(layer)] = layer_final_loss
 
         # Save Layer results
         layer_output = output_dir / f"layer_{layer}"
@@ -178,6 +183,14 @@ def main():
         }, output_file)
 
         logger.info(f"Factors for Layer {layer} saved to {output_file}")
+
+    config_with_results = {**vars(args), "snmf_final_best_loss_per_layer": final_loss_per_layer}
+    with open(config_path, "w") as f:
+        json.dump(config_with_results, f, indent=2)
+    logger.info(
+        f"Updated {config_path} with each layer's final best SNMF Frobenius loss "
+        f"(one training run per layer; see snmf_final_best_loss_per_layer)."
+    )
 
     logger.info("\n" + "=" * 60)
     logger.info("SNMF Training Session Successfully Completed.")
