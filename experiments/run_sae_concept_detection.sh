@@ -19,6 +19,6 @@ PYTHONPATH=. python experiments/concept_detection/benchmark_sae.py \
   --sentences-json experiments/artifacts/sae_generated_sentences.json \
   --concept-json data/gpt2_mlp_features.json \
   --save-path experiments/artifacts/sae_interpretability_results.json \
-  --device mps \
+  --device cpu \
   --overwrite \
   --verbose

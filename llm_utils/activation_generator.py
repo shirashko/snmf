@@ -1,16 +1,122 @@
-# Standard library imports
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, Callable
 from collections import Counter
-
-# Third-party imports
 import torch
 from transformers import AutoModelForCausalLM
 from tqdm import tqdm
 
-# Project-specific imports
+import transformer_lens.loading_from_pretrained as tl_loading
+from transformer_lens.HookedTransformerConfig import HookedTransformerConfig
 from transformer_lens import HookedTransformer, utils
 from data_utils.concept_dataset import ConceptDataset, SupervisedConceptDataset
+
+
+def _rope_theta_from_hf(hc) -> float:
+    t = getattr(hc, "rope_theta", None)
+    if t is not None:
+        return float(t)
+    rp = getattr(hc, "rope_parameters", None)
+    if isinstance(rp, dict):
+        return float(rp.get("rope_theta", 10000.0))
+    return 10000.0
+
+
+def _hooked_gemma2_cfg_from_hf(
+    official: str,
+    hf_model,
+    local_path: Path,
+    model_device: str,
+) -> HookedTransformerConfig:
+    """
+    Local dirs should be standard HF saves of Gemma2 (e.g. reduced from ``google/gemma-2-2b``
+    by editing ``Gemma2Config`` fields: ``num_hidden_layers``, ``hidden_size``, ``head_dim``,
+    ``intermediate_size``, … then ``save_pretrained``). That is the same config object we
+    read here via ``hf_model.config``.
+
+    TransformerLens' ``google/gemma-2-2b`` template alone fixes d_model/d_head for the real 2B
+    model; we merge those template defaults with the **actual** dimensions above so
+    ``HookedTransformer`` module shapes match the checkpoint tensors.
+    """
+    hc = hf_model.config
+    if getattr(hc, "model_type", None) != "gemma2":
+        raise TypeError(
+            "Local --model-name must be a Gemma2 HF save (config model_type=gemma2), "
+            f"e.g. reduced from google/gemma-2-2b via Gemma2Config + save_pretrained. "
+            f"Got model_type={getattr(hc, 'model_type', None)!r}."
+        )
+    base = tl_loading.get_pretrained_model_config(
+        official,
+        hf_cfg=hc.to_dict(),
+        first_n_layers=hc.num_hidden_layers,
+        device=model_device,
+    )
+    d = base.to_dict()
+    d["d_model"] = hc.hidden_size
+    d["d_head"] = int(
+        getattr(hc, "head_dim", hc.hidden_size // hc.num_attention_heads)
+    )
+    d["d_mlp"] = hc.intermediate_size
+    d["n_layers"] = hc.num_hidden_layers
+    d["n_heads"] = hc.num_attention_heads
+    d["n_ctx"] = hc.max_position_embeddings
+    d["eps"] = hc.rms_norm_eps
+    d["d_vocab"] = hc.vocab_size
+    kv = getattr(hc, "num_key_value_heads", None)
+    if kv is not None and kv != hc.num_attention_heads:
+        d["n_key_value_heads"] = kv
+    else:
+        d["n_key_value_heads"] = None
+    d["rotary_base"] = _rope_theta_from_hf(hc)
+    n = d["n_layers"]
+    lt = getattr(hc, "layer_types", None)
+    if lt and len(lt) == n:
+        d["attn_types"] = [
+            "local" if "sliding" in str(x).lower() else "global" for x in lt
+        ]
+    else:
+        d["attn_types"] = (["global", "local"] * ((n + 1) // 2))[:n]
+    # Same vocab as gemma-2-2b; loading tokenizer from local_dir can hit Gemma fast-tokenizer
+    # bugs (e.g. extra_special_tokens shape) with some saved tokenizer.json versions.
+    d["tokenizer_name"] = official
+    d["model_name"] = local_path.name
+    if "rotary_dim" in d:
+        d["rotary_dim"] = d["d_head"]
+    return HookedTransformerConfig.from_dict(d)
+
+
+def _load_hooked_local_gemma2(
+    official: str,
+    hf_model,
+    local_path: Path,
+    model_device: str,
+) -> HookedTransformer:
+    cfg = _hooked_gemma2_cfg_from_hf(official, hf_model, local_path, model_device)
+    dtype = torch.float32
+    state_dict = tl_loading.get_pretrained_state_dict(
+        official,
+        cfg,
+        hf_model,
+        dtype=dtype,
+    )
+    center_unembed = True
+    if getattr(cfg, "output_logits_soft_cap", 0.0) > 0.0:
+        center_unembed = False
+    model = HookedTransformer(
+        cfg,
+        tokenizer=None,
+        move_to_device=False,
+        default_padding_side="right",
+    )
+    model.load_and_process_state_dict(
+        state_dict,
+        fold_ln=True,
+        center_writing_weights=True,
+        center_unembed=center_unembed,
+        fold_value_biases=False,
+        refactor_factored_attn_matrices=False,
+    )
+    model.move_model_modules_to_device()
+    return model
 
 
 class ActivationGenerator:
@@ -44,15 +150,18 @@ class ActivationGenerator:
                 local_files_only=True,
                 trust_remote_code=True,
             )
-            self.model = HookedTransformer.from_pretrained(
+            # TL's gemma-2-2b template does not match arbitrary Gemma2 finetunes (d_model, d_head, …).
+            # Build cfg from hf_model.config, then load weights like from_pretrained.
+            self.model = _load_hooked_local_gemma2(
                 official,
-                hf_model=hf_model,
-                device=model_device,
+                hf_model,
+                local_path,
+                model_device,
             )
             self.model_name = str(local_path)
         else:
             self.model = HookedTransformer.from_pretrained(model_name, device=model_device)
-            self.model_name = model_name  # store for later use in helper functions
+            self.model_name = model_name
         self.data_device = data_device
         self._mode = mode
         if mode not in ['mlp', 'residual', 'mlp_out']:

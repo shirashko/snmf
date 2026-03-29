@@ -2,7 +2,7 @@ PYTHONPATH=. python experiments/sae_interp/generate_vocab_proj_sae.py\
   --concept-data data/gpt2_mlp_features.json \
   --out-json     experiments/artifacts/sae_vocab_proj.json \
   --model-name   gpt2-small \
-  --device       mps \
+  --device       cpu \
   --seed         42 \
   --top-k        50 \
   --intervention-type mlp_out \
@@ -42,7 +42,7 @@ PYTHONPATH=. python experiments/causal/generate_sae_causal_output.py \
   --gen-top-k 30 \
   --gen-top-p 0.3 \
   --seed 42 \
-  --device mps \
+  --device cpu \
   --include-layers 0
 
 

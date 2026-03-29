@@ -1,6 +1,7 @@
 from llm_utils.activation_generator import ActivationGenerator
 from factorization.seminmf import NMFSemiNMF
 from data_utils.concept_dataset import SupervisedConceptDataset
+from device_utils import default_device, resolve_device
 
 import argparse
 import random
@@ -39,9 +40,6 @@ def parse_int_list(spec: str) -> List[int]:
             out.append(int(chunk))
     return sorted(set(out))
 
-def default_device() -> str:
-    return "cuda" if torch.cuda.is_available() else "cpu"
-
 # ------------------------------
 # Main
 # ------------------------------
@@ -76,11 +74,12 @@ def main():
 
     # Devices
     parser.add_argument("--model-device", type=str, default=default_device(),
-                        help="Device for the model (e.g., 'cuda' or 'cpu').")
+                        help="Device for the model: 'auto' (cuda, else mps, else cpu), or explicit "
+                        "'cuda', 'cuda:N', 'mps', 'cpu'.")
     parser.add_argument("--data-device", type=str, default="cpu",
                         help="Device for holding/generated activations.")
     parser.add_argument("--fitting-device", type=str, default=default_device(),
-                        help="Device for NMF fitting (usually matches --model-device).")
+                        help="Device for NMF fitting (same options as --model-device).")
 
     # Paths
     parser.add_argument("--base-path", type=str, default=".",
@@ -98,9 +97,9 @@ def main():
 
     # Seed & devices
     set_seed(args.seed)
-    model_device = args.model_device
+    model_device = resolve_device(args.model_device, "Model device", log)
     data_device = args.data_device
-    fitting_device = args.fitting_device
+    fitting_device = resolve_device(args.fitting_device, "Fitting device", log)
 
     # Paths
     base_path = Path(args.base_path).resolve()

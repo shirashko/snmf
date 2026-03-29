@@ -7,9 +7,9 @@ PYTHONPATH=. python experiments/train/train.py \
     --factorization-mode mlp \
     --layers 0 \
     --data-path data/final_dataset_20_concepts.json \
-    --model-device mps \
+    --model-device cpu \
     --data-device cpu \
-    --fitting-device mps \
+    --fitting-device cpu \
     --base-path . \
     --save-path experiments/artifacts/ \
     --seed 42
@@ -26,7 +26,7 @@ PYTHONPATH=. python experiments/snmf_interp/generate_concept_context.py \
   --model-name "gpt2-small" \
   --factor-mode mlp \
   --data-path data/final_dataset_20_concepts.json \
-  --model-device mps \
+  --model-device cpu \
   --data-device cpu
 
 
@@ -51,7 +51,7 @@ PYTHONPATH=. python experiments/snmf_interp/generate_vocab_proj.py\
   --ranks 50 \
   --top-k 75 \
   --sparsity 0.01 \
-  --device mps \
+  --device cpu \
   --seed 123
 
 PYTHONPATH=. python experiments/snmf_interp/generate_output_centric_descriptions.py\
