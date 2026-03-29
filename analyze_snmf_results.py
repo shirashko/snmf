@@ -25,9 +25,19 @@ def main():
     parser.add_argument("--skip-vocab", action="store_true")
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--save-raw", action="store_true")
     parser.add_argument("--top-k-unsupervised", type=int, default=30)
-    parser.add_argument("--top-k-supervised", type=int, default=20)
+    parser.add_argument(
+        "--activation-context-top-n",
+        type=int,
+        default=10,
+        help="Per latent: log this many max- and min-activation token contexts in supervised JSON.",
+    )
+    parser.add_argument(
+        "--activation-context-window",
+        type=int,
+        default=15,
+        help="Tokens before/after the peak token in each logged context (same sample only).",
+    )
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
@@ -60,9 +70,9 @@ def main():
             sample_ids,
             token_ids,
             local_model.tokenizer,
-            save_raw=args.save_raw,
-            top_k=args.top_k_supervised,
             role_assignment_threshold=args.role_assignment_threshold,
+            context_top_n=args.activation_context_top_n,
+            context_window=args.activation_context_window,
         )
 
         with open(output_json_path, 'w') as f:
@@ -98,16 +108,12 @@ python analyze_snmf_results.py \
     --model-path "models/gemma2-2.03B_best_unlearn_model" \
     --results-dir "./final_run_all_layers" \
     --role-assignment-threshold 0.15 \
-    --top-k-supervised 50 \
-    --top-k-unsupervised 64 \
-    --save-raw
+    --top-k-unsupervised 64
     
     
 python analyze_snmf_results.py \
     --model-path "models/gemma2-2.03B_pretrained" \
     --results-dir "./pretrained_results" \
     --role-assignment-threshold 0.15 \
-    --top-k-supervised 50 \
-    --top-k-unsupervised 64 \
-    --save-raw
+    --top-k-unsupervised 64
 """

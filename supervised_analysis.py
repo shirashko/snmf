@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import torch
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
@@ -21,6 +21,48 @@ _LOG_RATIO_EPS = 1e-12
 
 def _log_ratio(num: float, den: float) -> float:
     return float(np.log((num + _LOG_RATIO_EPS) / (den + _LOG_RATIO_EPS)))
+
+
+def _sample_id_to_spans(sample_ids_arr: np.ndarray) -> Dict[int, Tuple[int, int]]:
+    """Map each sample_id to contiguous [start, end) slice in flat token arrays."""
+    n = len(sample_ids_arr)
+    if n == 0:
+        return {}
+    boundaries = np.r_[0, np.flatnonzero(sample_ids_arr[1:] != sample_ids_arr[:-1]) + 1, n]
+    spans: Dict[int, Tuple[int, int]] = {}
+    for a, b in zip(boundaries[:-1], boundaries[1:]):
+        spans[int(sample_ids_arr[a])] = (int(a), int(b))
+    return spans
+
+
+def _token_piece(tokenizer, tid: int) -> str:
+    toks = tokenizer.convert_ids_to_tokens([int(tid)])
+    return toks[0] if toks else str(tid)
+
+
+def _marked_context_text(
+    tokenizer,
+    all_token_ids: np.ndarray,
+    sample_ids_arr: np.ndarray,
+    spans: Dict[int, Tuple[int, int]],
+    global_idx: int,
+    context_window: int,
+) -> str:
+    """
+    Local window (``context_window`` tokens each side, same sample only); pieces from
+    ``convert_ids_to_tokens`` joined like the tutorial; peak token wrapped in ``**...**``.
+    """
+    sid = int(sample_ids_arr[global_idx])
+    samp_start, samp_end = spans[sid]
+    win_lo = max(samp_start, int(global_idx) - context_window)
+    win_hi = min(samp_end, int(global_idx) + context_window + 1)
+    parts: List[str] = []
+    for j in range(win_lo, win_hi):
+        if int(sample_ids_arr[j]) != sid:
+            continue
+        piece = _token_piece(tokenizer, int(all_token_ids[j]))
+        parts.append("**" + piece + "**" if j == global_idx else piece)
+    return "".join(parts)
 
 
 def _assign_role_label(
@@ -136,8 +178,8 @@ def analyze_features_supervised(
         sample_ids: List[int],
         token_ids: List[int],
         tokenizer,
-        top_k: int = 20,
-        save_raw: bool = True,
+        context_top_n: int = 10,
+        context_window: int = 15,
         forget_labels: set = FORGET_LABEL,
         retain_labels: set = RETAIN_LABELS,
         mult_labels: set = MULT_LABELS,
@@ -153,14 +195,18 @@ def analyze_features_supervised(
     - log((mult + div) / neutral)
 
     Also records activation stats, column energy share, and first right-singular-vector loading
-    (one SVD of G per call). Optional top-k raw exemplars are for inspection only (not used for scores).
+    (one SVD of G per call). For the top ``context_top_n`` max- and min-activation tokens,
+    logs lists of local window strings only (``context_window`` tokens each side, same sample),
+    peak marked with ``**...**``.
     """
     print("Profiling latents (supervised, group-sum log-ratios)...")
 
     n_tokens, n_latents = feature_acts.shape
     sample_ids_arr = np.asarray(sample_ids)
+    all_token_ids = np.asarray(token_ids, dtype=np.int64)
     labels_arr = np.asarray(labels)
     token_labels = labels_arr[sample_ids_arr]
+    spans = _sample_id_to_spans(sample_ids_arr)
 
     feature_acts_np = feature_acts.detach().cpu().numpy().astype(np.float64, copy=False)
     frob_sq = float(np.sum(feature_acts_np ** 2)) + _LOG_RATIO_EPS
@@ -232,15 +278,34 @@ def analyze_features_supervised(
             else None,
         }
 
-        if save_raw:
-            top_indices = np.argsort(col)[-top_k:][::-1]
-            top_tids = [token_ids[i] for i in top_indices]
-            profile["raw_evidence"] = {
-                "tokens": tokenizer.batch_decode([[tid] for tid in top_tids]),
-                "magnitudes": np.round(col[top_indices], 6).tolist(),
-                "labels": token_labels[top_indices].tolist(),
-                "sample_ids": sample_ids_arr[top_indices].tolist(),
-            }
+        kctx = min(context_top_n, n_tokens)
+        if kctx > 0:
+            pos_idx = np.argpartition(col, -kctx)[-kctx:]
+            pos_idx = pos_idx[np.argsort(col[pos_idx])[::-1]]
+            neg_idx = np.argpartition(col, kctx - 1)[:kctx]
+            neg_idx = neg_idx[np.argsort(col[neg_idx])]
+            profile["top_positive_activation_contexts"] = [
+                _marked_context_text(
+                    tokenizer,
+                    all_token_ids,
+                    sample_ids_arr,
+                    spans,
+                    int(gi),
+                    context_window,
+                )
+                for gi in pos_idx
+            ]
+            profile["top_negative_activation_contexts"] = [
+                _marked_context_text(
+                    tokenizer,
+                    all_token_ids,
+                    sample_ids_arr,
+                    spans,
+                    int(gi),
+                    context_window,
+                )
+                for gi in neg_idx
+            ]
 
         feature_profiles[latent_idx] = profile
 
