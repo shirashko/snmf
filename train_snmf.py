@@ -11,7 +11,7 @@ import torch
 from dotenv import load_dotenv
 
 from model_utils import load_local_model
-from activation_utils import LocalActivationGenerator
+from local_activation_generator import LocalActivationGenerator
 from data_utils.concept_dataset import SupervisedConceptDataset
 from factorization.seminmf import NMFSemiNMF
 from experiments.train.train import  parse_int_list

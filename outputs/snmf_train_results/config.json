@@ -1,0 +1,15 @@
+{
+  "model_path": "local_models/gemma-2-0.3B_reference_model",
+  "data_path": "data/data.json",
+  "output_dir": "outputs/snmf_train_results",
+  "layers": "7",
+  "rank": 100,
+  "sparsity": 0.01,
+  "init": "svd",
+  "normalize": false,
+  "mode": "mlp_intermediate",
+  "batch_size": 1,
+  "max_iter": 5000,
+  "device": "cpu",
+  "seed": 42
+}
