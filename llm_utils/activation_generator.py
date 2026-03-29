@@ -1,9 +1,11 @@
 # Standard library imports
-from typing import List, Tuple, Union, Callable
+from pathlib import Path
+from typing import List, Optional, Tuple, Union, Callable
 from collections import Counter
 
 # Third-party imports
 import torch
+from transformers import AutoModelForCausalLM
 from tqdm import tqdm
 
 # Project-specific imports
@@ -17,19 +19,40 @@ class ActivationGenerator:
         model_name: str,
         model_device: str = "cpu",
         data_device: str = "cpu",
-        mode: str = "residual"
+        mode: str = "residual",
+        tlens_official_name: Optional[str] = None,
     ):
         """
         Initialize the generator with a pretrained model.
         
         Args:
-            model_name (str): Name of the pretrained model.
+            model_name (str): HuggingFace hub id or absolute/relative path to a local
+                HF checkpoint directory (must contain config.json).
             model_device (str): Device to load the model onto.
             data_device (str): Device to load the data onto.
             mode (str): Which activation to use ("mlp" or "residual").
+            tlens_official_name (str, optional): When model_name is a local directory,
+                HookedTransformer still needs a registered TransformerLens model id for
+                weight conversion; weights come from the local checkpoint via hf_model.
+                Defaults to google/gemma-2-2b if unset (Gemma2 family).
         """
-        self.model = HookedTransformer.from_pretrained(model_name, device=model_device)
-        self.model_name = model_name  # store for later use in helper functions
+        local_path = Path(model_name).expanduser().resolve()
+        if local_path.is_dir() and (local_path / "config.json").is_file():
+            official = tlens_official_name or "google/gemma-2-2b"
+            hf_model = AutoModelForCausalLM.from_pretrained(
+                str(local_path),
+                local_files_only=True,
+                trust_remote_code=True,
+            )
+            self.model = HookedTransformer.from_pretrained(
+                official,
+                hf_model=hf_model,
+                device=model_device,
+            )
+            self.model_name = str(local_path)
+        else:
+            self.model = HookedTransformer.from_pretrained(model_name, device=model_device)
+            self.model_name = model_name  # store for later use in helper functions
         self.data_device = data_device
         self._mode = mode
         if mode not in ['mlp', 'residual', 'mlp_out']:

@@ -62,7 +62,11 @@ def main():
 
     # Model & data
     parser.add_argument("--model-name", type=str, default="meta-llama/Llama-3.1-8B",
-                        help="HF model name for ActivationGenerator.")
+                        help="HF hub id or path to a local HF checkpoint dir (with config.json) for ActivationGenerator.")
+    parser.add_argument("--tlens-model-name", type=str, default=None,
+                        help="TransformerLens-registered model id used only when --model-name is a local path "
+                        "(HookedTransformer needs this for conversion; weights still load from disk). "
+                        "Default: google/gemma-2-2b (Gemma2 checkpoints).")
     parser.add_argument("--factorization-mode", type=str, default="mlp",
                         help="Activation mode for ActivationGenerator (e.g., 'mlp').")
     parser.add_argument("--layers", type=str, default="0-31",
@@ -116,6 +120,7 @@ Base Path:             {base_path}
 Save Path:             {save_path}
 Data Path:             {data_path}
 Model Name:            {args.model_name}
+TLens official name:   {args.tlens_model_name or '(default for local Gemma2)'}
 Layers to Inspect:     {layers}
 Ranks:                 {ranks}
 Sparsity:              {args.sparsity}
@@ -137,6 +142,7 @@ Seed:                  {args.seed}
         model_device=model_device,
         data_device=data_device,
         mode=args.factorization_mode,
+        tlens_official_name=args.tlens_model_name,
     )
 
     log(f"Loading dataset from '{data_path}'")
