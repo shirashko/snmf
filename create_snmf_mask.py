@@ -71,11 +71,25 @@ def generate_optimized_snmf_mask(
         matching_features = set()
         for feat_idx in supervised.keys():
             feat_data = supervised[feat_idx]
-            purity = feat_data.get('purity_score', 0)
-            dom_concept = feat_data.get('dominant_concept', '').lower()
+            lr = feat_data.get("log_ratios", {})
+            log_m = lr.get("log_mult_vs_neutral_div", -1e9)
+            log_d = lr.get("log_div_vs_neutral_mult", -1e9)
+            log_f = lr.get("log_forget_vs_neutral", -1e9)
 
-            # Supervised check
-            is_supervised_math = any(target.lower() in dom_concept for target in target_concepts)
+            if lr:
+                is_supervised_math = False
+                for target in target_concepts:
+                    t = target.lower()
+                    if "multiplication" in t or t == "mult":
+                        is_supervised_math |= log_m >= purity_threshold
+                    if "division" in t or t == "div":
+                        is_supervised_math |= log_d >= purity_threshold
+                signal_ok = max(log_m, log_d, log_f) >= purity_threshold
+            else:
+                purity = feat_data.get("purity_score", 0)
+                dom_concept = feat_data.get("dominant_concept", "").lower()
+                is_supervised_math = any(target.lower() in dom_concept for target in target_concepts)
+                signal_ok = purity >= purity_threshold
 
             # Unsupervised check (token-based search)
             feat_unsupervised = unsupervised.get(feat_idx, {})
@@ -89,7 +103,7 @@ def generate_optimized_snmf_mask(
 
             is_unsupervised_math = (syntax_hits >= min_token_matches) or (syntax_hits >= 1 and digit_hits >= 2)
 
-            if (is_supervised_math or is_unsupervised_math) and purity >= purity_threshold:
+            if (is_supervised_math or is_unsupervised_math) and signal_ok:
                 matching_features.add(int(feat_idx))
 
         if not matching_features:

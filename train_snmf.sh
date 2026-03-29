@@ -20,7 +20,7 @@ export TORCH_HOME="/home/morg/students/rashkovits/hf_cache/torch"
 export TMPDIR="/home/morg/students/rashkovits/hf_cache"
 
 # --- Project Setup ---
-cd /home/morg/students/rashkovits/snmf-mlp-decomposition
+cd /home/morg/students/rashkovits/snmf
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 
 mkdir -p logs outputs/snmf_train_results $HF_HOME
@@ -35,7 +35,7 @@ echo "Starting SNMF Training on Node: $SLURMD_NODENAME"
 echo "--------------------------------------------------------"
 
 python train_snmf.py \
-    --model-path "local_models/gemma2-2.03B_reference_model" \
+    --model-path "local_models/gemma-2-0.3B_reference_model" \
     --data-path "data/data.json" \
     --output-dir "outputs/snmf_train_results" \
     --layers "7" \
@@ -46,8 +46,8 @@ python train_snmf.py \
     --device "cpu" \
     --sparsity 0.01 \
     --max-iter 5000 \
-    --seed 42
-    --output-dir "./train_results"
+    --seed 42 \
+    --output-dir "outputs/snmf_train_results"
 
 echo "--------------------------------------------------------"
 echo "SNMF Training Finished"

@@ -1,25 +1,67 @@
 import pandas as pd
 import numpy as np
 import torch
-from collections import Counter
 from typing import List, Dict, Any
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 import json
 
-FORGET_LABELS = {"multiplication_riddle", "division_riddle", "multiplication_symbolic", "division_symbolic"}
-RETAIN_LABELS = {"addition_riddle", "subtraction_riddle", "addition_symbolic", "subtraction_symbolic", "english"}
+MULT_LABEL = "mult_concept"
+DIV_LABEL = "div_concept"
+RETAIN_LABEL = "neutral"
+FORGET_LABEL = {MULT_LABEL, DIV_LABEL}
+
+RETAIN_LABELS = {RETAIN_LABEL}
+MULT_LABELS = {MULT_LABEL}
+DIV_LABELS = {DIV_LABEL}
+
+_LOG_RATIO_EPS = 1e-12
+
+
+def _log_ratio(num: float, den: float) -> float:
+    return float(np.log((num + _LOG_RATIO_EPS) / (den + _LOG_RATIO_EPS)))
+
+
+def _assign_role_label(
+    log_mult_vs_neutral_div: float,
+    log_div_vs_neutral_mult: float,
+    log_forget_vs_neutral: float,
+    sum_mult: float,
+    sum_div: float,
+    sum_neutral: float,
+    log_tau: float = 0.15,
+) -> str:
+    """Heuristic role from group-sum log-ratios (not top-k dominance)."""
+    total = sum_mult + sum_div + sum_neutral
+    if total < 1e-9:
+        return "low_signal"
+
+    if log_forget_vs_neutral >= log_tau:
+        if log_mult_vs_neutral_div >= log_tau and log_mult_vs_neutral_div >= log_div_vs_neutral_mult:
+            return "mult_forget"
+        if log_div_vs_neutral_mult >= log_tau and log_div_vs_neutral_mult > log_mult_vs_neutral_div:
+            return "div_forget"
+        return "forget_mixed"
+
+    if log_mult_vs_neutral_div >= log_tau and log_mult_vs_neutral_div >= log_div_vs_neutral_mult:
+        return "mult_lean"
+    if log_div_vs_neutral_mult >= log_tau:
+        return "div_lean"
+
+    if log_forget_vs_neutral <= -log_tau:
+        return "neutral_lean"
+
+    return "weak_mixed"
 
 
 def plot_layer_concept_trends(results_dir: str):
     """
-    Aggregates supervised analysis from all layers and plots trends.
+    Aggregates supervised analysis from all layers and plots trends (group-sum log-ratios).
     """
     results_path = Path(results_dir)
     all_data = []
 
-    # 1. Collect data from all layer folders
     for layer_folder in sorted(results_path.glob("layer_*"), key=lambda x: int(x.name.split('_')[1])):
         layer_idx = int(layer_folder.name.split('_')[1])
         json_file = layer_folder / "feature_analysis_supervised.json"
@@ -31,49 +73,59 @@ def plot_layer_concept_trends(results_dir: str):
             layer_results = json.load(f)
 
         for latent_idx, profile in layer_results.items():
+            lr = profile.get("log_ratios", {})
             all_data.append({
                 'layer': layer_idx,
                 'latent_idx': int(latent_idx),
-                'concept': profile['dominant_concept'],
-                'scd': profile['scd_score'],
-                'mean_act': profile['activation_stats']['mean'],
-                'purity': profile['purity_score']
+                'role': profile.get('role_label', 'unknown'),
+                'log_mult_nd': lr.get('log_mult_vs_neutral_div', np.nan),
+                'log_div_nm': lr.get('log_div_vs_neutral_mult', np.nan),
+                'log_fd_n': lr.get('log_forget_vs_neutral', np.nan),
+                'mean_act': profile.get('activation_stats', {}).get('mean', np.nan),
             })
 
     df = pd.DataFrame(all_data)
+    if df.empty:
+        print("No feature_analysis_supervised.json data found for plotting.")
+        return
 
-    # 2. Setup Plotting
-    fig, axes = plt.subplots(2, 1, figsize=(14, 12))
+    fig, axes = plt.subplots(3, 1, figsize=(14, 14))
     sns.set_style("whitegrid")
 
-    # Plot A: Mean SCD per Concept across Layers
-    # This shows WHERE in the model multiplication/division features become most specific
     sns.lineplot(
-        data=df, x='layer', y='scd', hue='concept',
-        ax=axes[0], marker='o', err_style="band", errorbar='sd'
+        data=df, x='layer', y='log_mult_nd', hue='role',
+        ax=axes[0], marker='o', err_style="band", errorbar='sd', legend='brief'
     )
-    axes[0].set_title("Concept Specificity (SCD) across Model Layers", fontsize=15)
-    axes[0].set_ylabel("Mean SCD Score (Higher = More Specific)")
-    axes[0].axhline(0, ls='--', color='black', alpha=0.5)
+    axes[0].set_title("log(mult / (neutral + div)) by layer and role_label", fontsize=14)
+    axes[0].set_ylabel("log ratio")
+    axes[0].axhline(0, ls='--', color='black', alpha=0.4)
 
-    # Plot B: Activation Intensity (Mean) per Concept
-    # This shows which layers are "computing" these concepts most intensely
     sns.lineplot(
-        data=df, x='layer', y='mean_act', hue='concept',
-        ax=axes[1], marker='s', err_style="band", errorbar='sd'
+        data=df, x='layer', y='log_div_nm', hue='role',
+        ax=axes[1], marker='o', err_style="band", errorbar='sd', legend='brief'
     )
-    axes[1].set_title("Activation Intensity (Mean) across Model Layers", fontsize=15)
-    axes[1].set_ylabel("Mean Activation Value")
+    axes[1].set_title("log(div / (neutral + mult)) by layer and role_label", fontsize=14)
+    axes[1].set_ylabel("log ratio")
+    axes[1].axhline(0, ls='--', color='black', alpha=0.4)
+
+    sns.lineplot(
+        data=df, x='layer', y='log_fd_n', hue='role',
+        ax=axes[2], marker='s', err_style="band", errorbar='sd', legend='brief'
+    )
+    axes[2].set_title("log((mult + div) / neutral) by layer and role_label", fontsize=14)
+    axes[2].set_ylabel("log ratio")
+    axes[2].axhline(0, ls='--', color='black', alpha=0.4)
 
     plt.tight_layout()
     plt.show()
 
-    # 3. Print a quick Summary Table for you
-    print("\n--- Summary Statistics by Concept ---")
-    summary = df.groupby('concept').agg({
-        'scd': ['mean', 'std', 'max'],
+    print("\n--- Summary by role_label ---")
+    summary = df.groupby('role').agg({
+        'log_mult_nd': ['mean', 'std'],
+        'log_div_nm': ['mean', 'std'],
+        'log_fd_n': ['mean', 'std'],
         'mean_act': ['mean', 'std'],
-        'latent_idx': 'count'
+        'latent_idx': 'count',
     }).round(3)
     print(summary)
 
@@ -85,132 +137,128 @@ def analyze_features_supervised(
         token_ids: List[int],
         tokenizer,
         top_k: int = 20,
-        dominance_threshold: float = 0.5,
         save_raw: bool = True,
-        forget_labels: set = FORGET_LABELS,
+        forget_labels: set = FORGET_LABEL,
         retain_labels: set = RETAIN_LABELS,
+        mult_labels: set = MULT_LABELS,
+        div_labels: set = DIV_LABELS,
+        role_assignment_threshold: float = 0.15,
 ) -> Dict[int, Dict[str, Any]]:
     """
-    Performs semantic profiling of latent features by aligning peak activations
-    with supervised ground-truth metadata.
+    For each latent, sum token activations by supervised label group (neutral / mult / div),
+    then report log-ratios:
 
-    This analysis quantifies the 'monosemanticity' of learned dictionary elements.
-    For each latent feature, we extract the top-k activating tokens ('exemplars')
-    and map them back to their source samples to retrieve semantic labels.
+    - log(mult / (neutral + div))
+    - log(div / (neutral + mult))
+    - log((mult + div) / neutral)
 
-    We calculate:
-    1. Purity Score: The maximum probability of a single concept within the top-k exemplars.
-    2. Label Entropy: A measure of polysemanticity (higher entropy indicates a feature
-       representing multiple unrelated concepts).
-    3. Activation Statistics: The distributional properties of the feature across the corpus.
-
-    Args:
-        feature_acts (torch.Tensor): Activation matrix of shape (n_tokens, n_latents).
-        labels (List[str]): Ground-truth concept labels for each sample in the dataset.
-            Shape: (n_samples,).
-        sample_ids (List[int]): A mapping from token index to its parent sample index.
-            Used to resolve the semantic context of individual activations.
-            Shape: (n_tokens,).
-        token_ids (List[int]): Integer IDs for each token in the activation trace.
-        tokenizer: The model's tokenizer used for decoding exemplar tokens into text.
-        top_k (int): Number of maximal activations (exemplars) used to profile each latent.
-        dominance_threshold (float): The purity cutoff (0.0-1.0). Latents below this
-            threshold are categorized as 'polysemantic'.
-        save_raw (bool): If True, includes the raw activation magnitudes and decoded
-            exemplar tokens for manual inspection.
-
-    Returns:
-        Dict[int, Dict[str, Any]]: A dictionary where each key is a latent index
-            mapping to its semantic profile (dominant concept, purity, entropy, etc.).
+    Also records activation stats, column energy share, and first right-singular-vector loading
+    (one SVD of G per call). Optional top-k raw exemplars are for inspection only (not used for scores).
     """
-    print(f"Profiling latents (supervised, threshold={dominance_threshold})...")
+    print("Profiling latents (supervised, group-sum log-ratios)...")
 
     n_tokens, n_latents = feature_acts.shape
-    sample_ids_arr = np.array(sample_ids)
-    labels_arr = np.array(labels)
-    token_metadata = labels_arr[sample_ids_arr]
+    sample_ids_arr = np.asarray(sample_ids)
+    labels_arr = np.asarray(labels)
+    token_labels = labels_arr[sample_ids_arr]
 
-    feature_profiles = {}
-    feature_acts_np = feature_acts.detach().cpu().numpy()
+    feature_acts_np = feature_acts.detach().cpu().numpy().astype(np.float64, copy=False)
+    frob_sq = float(np.sum(feature_acts_np ** 2)) + _LOG_RATIO_EPS
 
-    # This maps every token activation to its sample_id and label
-    base_df = pd.DataFrame({
-        'sample_id': sample_ids_arr,
-        'label': token_metadata
-    })
+    # Right singular vectors: how each latent loads on the leading variance axis of G
+    try:
+        _, _, vt = np.linalg.svd(feature_acts_np, full_matrices=False)
+        svd_row0 = vt[0, :].astype(np.float64)
+    except np.linalg.LinAlgError:
+        svd_row0 = np.full(n_latents, np.nan, dtype=np.float64)
+
+    supervised_mask = np.isin(token_labels, list(forget_labels | retain_labels))
+    token_labels_sup = token_labels.copy()
+    token_labels_sup[~supervised_mask] = ""
+
+    is_neutral = np.isin(token_labels_sup, list(retain_labels))
+    is_mult = np.isin(token_labels_sup, list(mult_labels))
+    is_div = np.isin(token_labels_sup, list(div_labels))
+
+    feature_profiles: Dict[int, Dict[str, Any]] = {}
 
     for latent_idx in range(n_latents):
-        latent_activations = feature_acts_np[:, latent_idx]
+        col = feature_acts_np[:, latent_idx]
+        sum_neutral = float(np.sum(col[is_neutral]))
+        sum_mult = float(np.sum(col[is_mult]))
+        sum_div = float(np.sum(col[is_div]))
+        sum_forget = sum_mult + sum_div
 
-        # --- SCD Calculation Logic ---
-        # 1. Add current latent activations to our dataframe
-        base_df['act'] = latent_activations
+        others_for_mult = sum_neutral + sum_div
+        others_for_div = sum_neutral + sum_mult
 
-        # 2. Get the maximum activation per sample (sentence)
-        relevant_samples = base_df[base_df['label'].isin(forget_labels | retain_labels)]
-        sample_max_acts = relevant_samples.groupby(['sample_id', 'label'])['act'].max().reset_index()
+        log_mult_vs_neutral_div = _log_ratio(sum_mult, others_for_mult)
+        log_div_vs_neutral_mult = _log_ratio(sum_div, others_for_div)
+        log_forget_vs_neutral = _log_ratio(sum_forget, sum_neutral)
 
-        # 3. Compute mean of maximums for each group
-        # a_activating: Average peak activation in 'forget' sentences
-        # a_neutral: Average peak activation in 'retain' sentences
-        a_activating = sample_max_acts[sample_max_acts['label'].isin(forget_labels)]['act'].mean()
-        a_neutral = sample_max_acts[sample_max_acts['label'].isin(retain_labels)]['act'].mean()
+        role_label = _assign_role_label(
+            log_mult_vs_neutral_div,
+            log_div_vs_neutral_mult,
+            log_forget_vs_neutral,
+            sum_mult,
+            sum_div,
+            sum_neutral,
+            log_tau=role_assignment_threshold,
+        )
 
-        # 4. Calculate SCD (Log-Ratio)
-        # Higher positive value = stronger detection of the target concept
-        scd_score = np.log((a_activating + 1e-9) / (a_neutral + 1e-9))
-
-        # --- Standard Top-K Profiling ---
-        top_indices = np.argsort(latent_activations)[-top_k:][::-1]
-        exemplar_labels = token_metadata[top_indices]
-        exemplar_magnitudes = latent_activations[top_indices]
-
-        semantic_counts = Counter(exemplar_labels)
-        most_frequent_concept, frequent_concept_count = semantic_counts.most_common(1)[0]
-        dominance_ratio = frequent_concept_count / top_k
-
-        probs = np.array(list(semantic_counts.values())) / top_k
-        entropy = -np.sum(probs * np.log2(probs + 1e-9))
-
-        assigned_concept = most_frequent_concept if dominance_ratio >= dominance_threshold else "polysemantic"
-
-        profile = {
-            'dominant_concept': assigned_concept,
-            'purity_score': round(float(dominance_ratio), 3),
-            'scd_score': round(float(scd_score), 4),
-            'mean_max_activating': round(float(a_activating), 4),
-            'mean_max_neutral': round(float(a_neutral), 4),
-            'entropy': round(float(entropy), 3),
-            'concept_distribution': dict(semantic_counts),
-            'activation_stats': {
-                'mean': round(float(np.mean(latent_activations)), 3),
-                'max': round(float(np.max(latent_activations)), 3),
-                'std': round(float(np.std(latent_activations)), 3)
-            }
+        col_sq = float(np.sum(col ** 2))
+        profile: Dict[str, Any] = {
+            "role_label": role_label,
+            "group_sums": {
+                "neutral": round(sum_neutral, 6),
+                "mult": round(sum_mult, 6),
+                "div": round(sum_div, 6),
+                "forget": round(sum_forget, 6),
+            },
+            "log_ratios": {
+                "log_mult_vs_neutral_div": round(log_mult_vs_neutral_div, 6),
+                "log_div_vs_neutral_mult": round(log_div_vs_neutral_mult, 6),
+                "log_forget_vs_neutral": round(log_forget_vs_neutral, 6),
+            },
+            "activation_stats": {
+                "mean": round(float(np.mean(col)), 6),
+                "max": round(float(np.max(col)), 6),
+                "std": round(float(np.std(col)), 6),
+                "sum_abs": round(float(np.sum(np.abs(col))), 6),
+            },
+            "column_frobenius_fraction": round(col_sq / frob_sq, 8),
+            "svd_top_right_loading": round(float(svd_row0[latent_idx]), 8)
+            if np.isfinite(svd_row0[latent_idx])
+            else None,
         }
 
         if save_raw:
+            top_indices = np.argsort(col)[-top_k:][::-1]
             top_tids = [token_ids[i] for i in top_indices]
-            profile['raw_evidence'] = {
-                'tokens': tokenizer.batch_decode([[tid] for tid in top_tids]),
-                'magnitudes': np.round(exemplar_magnitudes, 3).tolist(),
-                'labels': exemplar_labels.tolist(),
-                'sample_ids': sample_ids_arr[top_indices].tolist()
+            profile["raw_evidence"] = {
+                "tokens": tokenizer.batch_decode([[tid] for tid in top_tids]),
+                "magnitudes": np.round(col[top_indices], 6).tolist(),
+                "labels": token_labels[top_indices].tolist(),
+                "sample_ids": sample_ids_arr[top_indices].tolist(),
             }
 
         feature_profiles[latent_idx] = profile
 
-    # --- Summary Output ---
-    concept_map = {}
+    role_map: Dict[str, List[int]] = {}
     for idx, p in feature_profiles.items():
-        concept = p['dominant_concept']
-        concept_map.setdefault(concept, []).append(idx)
+        role_map.setdefault(p["role_label"], []).append(idx)
 
-    print("\nLatent-to-Concept Summary (Sorted by SCD Score):")
-    for concept, indices in sorted(concept_map.items()):
-        indices.sort(key=lambda x: feature_profiles[x]['scd_score'], reverse=True)
-        top_indices_str = ", ".join(
-            [f"{idx}(SCD:{feature_profiles[idx]['scd_score']:.2f})" for idx in indices[:5]])
-        print(f"  {concept:25} | Total: {len(indices):3} | Top Latents: {top_indices_str}")
+    print("\nLatent summary by role_label (top 5 per role by log_forget_vs_neutral):")
+    for role in sorted(role_map.keys()):
+        indices = role_map[role]
+        indices.sort(
+            key=lambda x: feature_profiles[x]["log_ratios"]["log_forget_vs_neutral"],
+            reverse=True,
+        )
+        top_str = ", ".join(
+            f"{i}(log_fd_n:{feature_profiles[i]['log_ratios']['log_forget_vs_neutral']:.2f})"
+            for i in indices[:5]
+        )
+        print(f"  {role:18} | n={len(indices):4} | {top_str}")
 
     return feature_profiles
