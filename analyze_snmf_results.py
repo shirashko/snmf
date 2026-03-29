@@ -48,7 +48,7 @@ def main():
             raise ValueError("Must provide --data-path for LLM profiling.")
 
         dataset = SupervisedConceptDataset(args.data_path)
-        original_prompts = [item[0] for item in dataset.get_data()]
+        original_prompts, _ = dataset.get_data()
 
         interpreter = FeatureInterpreter(
             tokenizer=local_model.tokenizer,

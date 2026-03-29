@@ -103,7 +103,14 @@ class SupervisedConceptDataset:
     def __getitem__(self, idx) -> Tuple[str, str]:
         # Return a tuple of (prompt, label) for the given index
         return self.data[idx]
-    
+
+    def get_data(self) -> Tuple[List[str], List[str]]:
+        """Return all prompts and labels as two parallel lists."""
+        if not self.data:
+            return [], []
+        prompts, labels = zip(*self.data)
+        return list(prompts), list(labels)
+
     def get_batches(self, batch_size: int) -> List[dict]:
         """
         Group the data into batches of prompts and labels.

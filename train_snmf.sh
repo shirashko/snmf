@@ -35,17 +35,19 @@ echo "Starting SNMF Training on Node: $SLURMD_NODENAME"
 echo "--------------------------------------------------------"
 
 python train_snmf.py \
-    --model-path "models/gemma2-2.03B_best_unlearn_model" \
-    --data-path "data/data_subsampled.json" \
+    --model-path "local_models/gemma2-2.03B_reference_model" \
+    --data-path "data/data.json" \
     --output-dir "outputs/snmf_train_results" \
-    --layers "0,3,5,13" \
-    --rank 25 \
+    --layers "7" \
+    --rank 100 \
     --mode "mlp_intermediate" \
+    --init "svd" \
     --batch-size 1 \
     --device "cpu" \
     --sparsity 0.01 \
     --max-iter 5000 \
     --seed 42
+    --output-dir "./train_results"
 
 echo "--------------------------------------------------------"
 echo "SNMF Training Finished"

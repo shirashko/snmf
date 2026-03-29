@@ -35,12 +35,10 @@ def setup_logger(output_dir: Path):
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    # Console Handler (Standard Output)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(log_formatter)
     logger.addHandler(console_handler)
 
-    # File Handler (Saved to Output Directory)
     file_handler = logging.FileHandler(output_dir / "run.log")
     file_handler.setFormatter(log_formatter)
     logger.addHandler(file_handler)
@@ -130,9 +128,7 @@ def main():
     model = load_local_model(model_path=args.model_path, device=device)
 
     dataset = SupervisedConceptDataset(args.data_path)
-    data = dataset.get_data()
-    prompts, labels = zip(*data)
-    prompts, labels = list(prompts), list(labels)
+    prompts, labels = dataset.get_data()
 
     # Activation Collection
     logger.info(f"Collecting activations for {len(prompts)} samples...")
@@ -188,18 +184,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-""" 
-python train_snmf.py \
-    --model-path "models/gemma2-2.03B_pretrained" \
-    --data-path "data/data_subsampled.json" \
-    --layers "0-13" \
-    --rank 256 \
-    --sparsity 0.08 \
-    --init "svd" \
-    --normalize \
-    --max-iter 5000 \
-    --batch-size 15 \
-    --output-dir "./pretrained_results"
-"""
