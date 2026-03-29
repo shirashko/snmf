@@ -3,15 +3,16 @@ from tqdm import tqdm
 from typing import List, Tuple, Dict
 from contextlib import contextmanager
 import sys
+from model_utils import LocalModel
 
 
 class LocalActivationGenerator:
-    def __init__(self, local_model, data_device="cpu", mode="mlp"):
+    def __init__(self, local_model: LocalModel, data_device="cpu", mode="mlp"):
         self.local_model = local_model
         self.model = local_model.model
         self.tokenizer = local_model.tokenizer
         self.data_device = data_device
-        self._mode = mode
+        self.mode = mode
         self.layer_modules = self.model.model.layers
 
     @contextmanager
@@ -21,15 +22,14 @@ class LocalActivationGenerator:
 
         def get_hook_fn(layer_key):
             def hook_fn(module, input, output):
-                target = input[0] if self._mode == 'mlp_intermediate' else output
+                target = input[0] if self.mode == 'mlp_intermediate' else output
                 storage[layer_key] = target.detach().cpu()
 
             return hook_fn
 
         for idx, layer_num in enumerate(layers):
             module = self.layer_modules[layer_num].mlp
-            # Note: Gemma-2 MLP structure may vary, ensuring we hook the correct projection
-            target_module = module.down_proj if self._mode == 'mlp_intermediate' else module
+            target_module = module.down_proj if self.mode== 'mlp_intermediate' else module
             hooks.append(target_module.register_forward_hook(get_hook_fn(idx)))
 
         try:
@@ -68,7 +68,7 @@ class LocalActivationGenerator:
                     ).to(self.local_model.device)
 
                     # Forward pass
-                    outputs = self.model(**encoded, output_hidden_states=(self._mode == 'residual'))
+                    outputs = self.model(**encoded, output_hidden_states=(self.mode== 'residual'))
 
                     # Masking logic
                     mask = encoded["attention_mask"].bool().cpu()
@@ -85,7 +85,7 @@ class LocalActivationGenerator:
 
                     # Extract activations from storage (already on CPU)
                     for idx, layer in enumerate(layers):
-                        if self._mode == 'residual':
+                        if self.mode== 'residual':
                             acts = outputs.hidden_states[layer + 1].detach().cpu()
                         else:
                             acts = mlp_storage[idx]  # Already CPU from hook

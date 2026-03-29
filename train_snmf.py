@@ -89,7 +89,7 @@ def run_snmf(
     activation_matrix = activations.T.to(device)
 
     nmf = NMFSemiNMF(rank, fitting_device=device, sparsity=sparsity)
-    # The NMFSemiNMF.fit usually prints to stdout; you can wrap it if needed.
+    # The NMFSemiNMF.fit usually prints to stdout. We can wrap it if needed.
     nmf.fit(activation_matrix, max_iter=max_iter, patience=patience, verbose=True, init=init)
 
     F = nmf.F_.detach().cpu()  # (d_features, rank)
@@ -132,7 +132,10 @@ def main():
 
     # Activation Collection
     logger.info(f"Collecting activations for {len(prompts)} samples...")
+    logger.info(f"Number of labels: {len(labels)}")
     act_gen = LocalActivationGenerator(model, data_device="cpu", mode=args.mode)
+
+    # 
     activations_per_layer, token_ids, sample_ids = act_gen.generate_activations(
         prompts=prompts, layers=layers, batch_size=args.batch_size
     )
