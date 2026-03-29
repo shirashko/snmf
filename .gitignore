@@ -26,7 +26,13 @@ env/
 
 # Experiment outputs (scripts write JSON, .pkl factorizations, etc. here)
 experiments/artifacts/
+experiments/snmf-*.out
+experiments/snmf-*.err
 rebuttal/
+
+# Logs (training job stdout/stderr, training_summary.log, etc.)
+logs/
+*.log
 
 # Local / downloaded model weights (HF checkpoints, etc.)
 local_models/
@@ -34,6 +40,9 @@ local_models/
 # Hugging Face & common ML caches
 .cache/
 huggingface/
+
+# Pip temp dirs when TMPDIR/cwd pointed at repo (build/unpack leftovers)
+/pip-*/
 
 # OS & editors
 .DS_Store
