@@ -74,6 +74,56 @@ def get_vocab_proj_gemma(concept_vector, model, top_k=50, device="cuda"):
     return values, indices
 
 
+@torch.no_grad()
+def get_vocab_proj_gemma_hf(concept_vector, hf_model, top_k=50, device="cuda"):
+    """
+    For HuggingFace Gemma-2 models.
+
+    Equivalent to TransformerLens version:
+        direction = model.ln_final(concept_vector)
+        vocab_proj = model.unembed(direction)
+
+    Args:
+        concept_vector: Vector in residual stream space (d_model,)
+        hf_model: HuggingFace AutoModelForCausalLM
+        top_k: Number of top tokens to return
+        device: Torch device
+
+    Returns:
+        (values, indices) - top-k logit values and token indices
+    """
+    # Apply final layer norm (equivalent to ln_final)
+    direction = hf_model.model.norm(concept_vector.unsqueeze(0).to(device))  # (1, hidden_size)
+
+    # Apply unembedding via lm_head (equivalent to unembed)
+    vocab_proj = hf_model.lm_head(direction).squeeze()  # (vocab_size,)
+
+    # Get top-k
+    values, indices = torch.topk(vocab_proj, top_k)
+    return values, indices
+
+
+@torch.no_grad()
+def get_vocab_proj_residual_hf(residual_vec, hf_model, top_k=50, device="cuda"):
+    """
+    For HuggingFace models when feature is already in residual stream space.
+    Just applies final norm and unembeds.
+
+    Args:
+        residual_vec: Vector in residual stream space (d_model,)
+        hf_model: HuggingFace AutoModelForCausalLM
+        top_k: Number of top tokens to return
+        device: Torch device
+
+    Returns:
+        (values, indices) - top-k logit values and token indices
+    """
+    direction = hf_model.model.norm(residual_vec.unsqueeze(0).to(device))
+    vocab_proj = hf_model.lm_head(direction).squeeze()
+    values, indices = torch.topk(vocab_proj, top_k)
+    return values, indices
+
+
 # ------------------------------
 # Main
 # ------------------------------

@@ -1,6 +1,7 @@
 import os
 import re
 import pickle
+import warnings
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
@@ -25,15 +26,48 @@ def set_seed(seed: int = 42) -> None:
     torch.backends.cudnn.benchmark = False
 
 
+def _cuda_usable_for_compute() -> bool:
+    """
+    torch.cuda.is_available() can be True on GPUs whose architecture is not compiled
+    into this PyTorch binary (e.g. Pascal sm_61 vs wheels that only ship sm_70+).
+    """
+    if not torch.cuda.is_available():
+        return False
+    try:
+        t = torch.zeros(1, device="cuda", dtype=torch.float32)
+        _ = (t + 1.0).item()
+        torch.cuda.synchronize()
+        return True
+    except Exception:
+        return False
+
+
 def resolve_device(spec: str) -> str:
-    spec = spec.lower()
-    if spec != "auto":
-        return spec
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
+    s = spec.lower().strip()
+    if s == "auto":
+        if _cuda_usable_for_compute():
+            return "cuda"
+        if torch.cuda.is_available():
+            warnings.warn(
+                "CUDA is visible but kernels fail on this GPU with the installed PyTorch "
+                "(e.g. architecture too old for this wheel, such as sm_61 vs a sm_70+ build). "
+                "Using CPU.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    if s == "cuda":
+        if _cuda_usable_for_compute():
+            return "cuda"
+        warnings.warn(
+            "CUDA requested but this GPU is not usable with the installed PyTorch build; using CPU.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return "cpu"
+    return spec
 
 
 def _safe_model_name(model_name: str) -> str:

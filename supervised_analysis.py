@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 import torch
@@ -40,6 +41,11 @@ def _token_piece(tokenizer, tid: int) -> str:
     return toks[0] if toks else str(tid)
 
 
+def _sp_piece_to_space(text: str) -> str:
+    """SentencePiece / Gemma use U+2581 (▁) at subword starts; swap for ASCII space for readable JSON."""
+    return text.replace("\u2581", " ")
+
+
 def _marked_context_text(
     tokenizer,
     all_token_ids: np.ndarray,
@@ -62,7 +68,7 @@ def _marked_context_text(
             continue
         piece = _token_piece(tokenizer, int(all_token_ids[j]))
         parts.append("**" + piece + "**" if j == global_idx else piece)
-    return "".join(parts)
+    return _sp_piece_to_space("".join(parts))
 
 
 def _assign_role_label(
@@ -159,7 +165,10 @@ def plot_layer_concept_trends(results_dir: str):
     axes[2].axhline(0, ls='--', color='black', alpha=0.4)
 
     plt.tight_layout()
-    plt.show()
+    plot_path = results_path / "layer_concept_trends.png"
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    print(f"Saved trend plot to {plot_path}")
+    plt.close(fig)
 
     print("\n--- Summary by role_label ---")
     summary = df.groupby('role').agg({

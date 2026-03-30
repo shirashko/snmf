@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # --- Slurm Configuration ---
-#SBATCH --job-name=train_snmf
-#SBATCH --output=logs/train_%j.out
-#SBATCH --error=logs/train_%j.err
-#SBATCH --time=24:00:00
+#SBATCH --job-name=analyze_snmf
+#SBATCH --output=logs/analyze_%j.out
+#SBATCH --error=logs/analyze_%j.err
+#SBATCH --time=8:00:00
 #SBATCH --partition=studentkillable
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
@@ -23,32 +23,26 @@ export TMPDIR="/home/morg/students/rashkovits/hf_cache"
 cd /home/morg/students/rashkovits/snmf
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 
-mkdir -p logs outputs/snmf_train_results $HF_HOME
+mkdir -p logs $HF_HOME
 
 # --- Parallelism Optimization ---
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-# --- Execute Training ---
+# --- Execute Analysis ---
 echo "--------------------------------------------------------"
-echo "Starting SNMF Training on Node: $SLURMD_NODENAME"
+echo "Starting SNMF results analysis on Node: $SLURMD_NODENAME"
 echo "--------------------------------------------------------"
 
-python train_snmf.py \
+python analyze_snmf_results.py \
     --model-path "local_models/gemma-2-0.3B_reference_model" \
-    --data-path "data/data.json" \
-    --output-dir "outputs/snmf_train_results" \
-    --layers "7" \
-    --rank 100 \
-    --mode "mlp_intermediate" \
-    --init "svd" \
-    --batch-size 8 \
+    --results-dir "outputs/snmf_train_results_02" \
+    --role-assignment-threshold 0.15 \
     --device "auto" \
-    --sparsity 0.01 \
-    --max-iter 5000 \
     --seed 42 \
-    --output-dir "outputs/snmf_train_results_02" \
-    --skip-vocab
+    --top-k-unsupervised 30 \
+    --activation-context-top-n 10 \
+    --activation-context-window 15
 
 echo "--------------------------------------------------------"
-echo "SNMF Training Finished"
+echo "SNMF analysis finished"

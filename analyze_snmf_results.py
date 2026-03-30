@@ -2,8 +2,6 @@ import argparse
 import json
 import torch
 from pathlib import Path
-from transformers.models.gemma.tokenization_gemma_fast import GemmaTokenizerFast
-torch.serialization.add_safe_globals([GemmaTokenizerFast])
 
 from utils import resolve_device, set_seed
 from model_utils import load_local_model
@@ -75,8 +73,8 @@ def main():
             context_window=args.activation_context_window,
         )
 
-        with open(output_json_path, 'w') as f:
-            json.dump(supervised_results, f, indent=2)
+        with open(output_json_path, "w", encoding="utf-8") as f:
+            json.dump(supervised_results, f, indent=2, ensure_ascii=False)
 
         # Unsupervised Vocabulary Projection (Logit Lens)
         if not args.skip_vocab:
@@ -87,8 +85,8 @@ def main():
                 mode=mode,
                 top_k_tokens=args.top_k_unsupervised
             )
-            with open(layer_folder / "feature_analysis_unsupervised.json", 'w') as f:
-                json.dump(unsupervised_results, f, indent=2)
+            with open(layer_folder / "feature_analysis_unsupervised.json", "w", encoding="utf-8") as f:
+                json.dump(unsupervised_results, f, indent=2, ensure_ascii=False)
 
     print("\nGenerating model-wide trend plots...")
     try:

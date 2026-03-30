@@ -18,9 +18,8 @@ def load_local_model(model_path: str, device: str = "cpu") -> LocalModel:
     config = AutoConfig.from_pretrained(model_path)
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        output_hidden_states=True,
-        attn_implementation='eager',
-        torch_dtype=torch.float32,
+        attn_implementation="eager",
+        dtype=torch.float32,
     )
     model.eval().to(device)
 
