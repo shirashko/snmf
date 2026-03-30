@@ -196,8 +196,10 @@ def analyze_features_supervised(
         role_assignment_threshold: float = 0.15,
 ) -> Dict[int, Dict[str, Any]]:
     """
-    For each latent, sum token activations by supervised label group (neutral / mult / div),
-    then report log-ratios:
+    For each latent, compute group-sum log-ratios (neutral / mult / div).
+
+    Each prompt contributes only its single maximum-activation token (per latent) to
+    the group sums, removing prompt-length bias in the log-ratio computations.
 
     - log(mult / (neutral + div))
     - log(div / (neutral + mult))
@@ -227,21 +229,47 @@ def analyze_features_supervised(
     except np.linalg.LinAlgError:
         svd_row0 = np.full(n_latents, np.nan, dtype=np.float64)
 
-    supervised_mask = np.isin(token_labels, list(forget_labels | retain_labels))
-    token_labels_sup = token_labels.copy()
-    token_labels_sup[~supervised_mask] = ""
+    sample_ids_list = list(spans.keys())
+    n_prompts = len(sample_ids_list)
 
-    is_neutral = np.isin(token_labels_sup, list(retain_labels))
-    is_mult = np.isin(token_labels_sup, list(mult_labels))
-    is_div = np.isin(token_labels_sup, list(div_labels))
+    # Prompt-level labels for supervised group membership.
+    sample_labels_arr = labels_arr[np.asarray(sample_ids_list, dtype=np.int64)]
+    supervised_mask_samples = np.isin(sample_labels_arr, list(forget_labels | retain_labels))
+    sample_labels_sup = sample_labels_arr.copy()
+    sample_labels_sup[~supervised_mask_samples] = ""
+
+    is_neutral = np.isin(sample_labels_sup, list(retain_labels))
+    is_mult = np.isin(sample_labels_sup, list(mult_labels))
+    is_div = np.isin(sample_labels_sup, list(div_labels))
+
+    # Reduce each prompt to one peak token per latent:
+    # max for positive context/log-sums, and min for negative context display.
+    prompt_max_vals = np.empty((n_prompts, n_latents), dtype=np.float64)
+    prompt_max_indices = np.empty((n_prompts, n_latents), dtype=np.int64)
+    prompt_min_vals = np.empty((n_prompts, n_latents), dtype=np.float64)
+    prompt_min_indices = np.empty((n_prompts, n_latents), dtype=np.int64)
+
+    ar = np.arange(n_latents, dtype=np.int64)
+    for i, sid in enumerate(sample_ids_list):
+        samp_start, samp_end = spans[sid]
+        seg = feature_acts_np[samp_start:samp_end, :]  # (seq_len_in_prompt, n_latents)
+
+        local_argmax = np.argmax(seg, axis=0)
+        prompt_max_indices[i, :] = samp_start + local_argmax
+        prompt_max_vals[i, :] = seg[local_argmax, ar]
+
+        local_argmin = np.argmin(seg, axis=0)
+        prompt_min_indices[i, :] = samp_start + local_argmin
+        prompt_min_vals[i, :] = seg[local_argmin, ar]
 
     feature_profiles: Dict[int, Dict[str, Any]] = {}
 
     for latent_idx in range(n_latents):
         col = feature_acts_np[:, latent_idx]
-        sum_neutral = float(np.sum(col[is_neutral]))
-        sum_mult = float(np.sum(col[is_mult]))
-        sum_div = float(np.sum(col[is_div]))
+        col_max = prompt_max_vals[:, latent_idx]
+        sum_neutral = float(np.sum(col_max[is_neutral]))
+        sum_mult = float(np.sum(col_max[is_mult]))
+        sum_div = float(np.sum(col_max[is_div]))
         sum_forget = sum_mult + sum_div
 
         others_for_mult = sum_neutral + sum_div
@@ -287,12 +315,19 @@ def analyze_features_supervised(
             else None,
         }
 
-        kctx = min(context_top_n, n_tokens)
+        kctx = min(context_top_n, n_prompts)
+
         if kctx > 0:
-            pos_idx = np.argpartition(col, -kctx)[-kctx:]
-            pos_idx = pos_idx[np.argsort(col[pos_idx])[::-1]]
-            neg_idx = np.argpartition(col, kctx - 1)[:kctx]
-            neg_idx = neg_idx[np.argsort(col[neg_idx])]
+            # Pick top-k prompts by max activation, and top-k prompts by min activation.
+            col_min = prompt_min_vals[:, latent_idx]
+
+            pos_sample_idx = np.argpartition(col_max, -kctx)[-kctx:]
+            pos_sample_idx = pos_sample_idx[np.argsort(col_max[pos_sample_idx])[::-1]]
+            pos_global_idx = prompt_max_indices[pos_sample_idx, latent_idx]
+
+            neg_sample_idx = np.argpartition(col_min, kctx - 1)[:kctx]
+            neg_sample_idx = neg_sample_idx[np.argsort(col_min[neg_sample_idx])]
+            neg_global_idx = prompt_min_indices[neg_sample_idx, latent_idx]
             profile["top_positive_activation_contexts"] = [
                 _marked_context_text(
                     tokenizer,
@@ -302,7 +337,7 @@ def analyze_features_supervised(
                     int(gi),
                     context_window,
                 )
-                for gi in pos_idx
+                for gi in pos_global_idx
             ]
             profile["top_negative_activation_contexts"] = [
                 _marked_context_text(
@@ -313,7 +348,7 @@ def analyze_features_supervised(
                     int(gi),
                     context_window,
                 )
-                for gi in neg_idx
+                for gi in neg_global_idx
             ]
 
         feature_profiles[latent_idx] = profile
