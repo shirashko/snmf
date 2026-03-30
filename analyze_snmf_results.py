@@ -99,19 +99,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-"""
-python analyze_snmf_results.py \
-    --model-path "models/gemma2-2.03B_best_unlearn_model" \
-    --results-dir "./final_run_all_layers" \
-    --role-assignment-threshold 0.15 \
-    --top-k-unsupervised 64
-    
-    
-python analyze_snmf_results.py \
-    --model-path "models/gemma2-2.03B_pretrained" \
-    --results-dir "./pretrained_results" \
-    --role-assignment-threshold 0.15 \
-    --top-k-unsupervised 64
-"""

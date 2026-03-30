@@ -42,7 +42,8 @@ python analyze_snmf_results.py \
     --seed 42 \
     --top-k-unsupervised 30 \
     --activation-context-top-n 10 \
-    --activation-context-window 15
+    --activation-context-window 15 \
+    --skip-vocab
 
 echo "--------------------------------------------------------"
 echo "SNMF analysis finished"
