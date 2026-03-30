@@ -75,29 +75,29 @@ def _assign_role_label(
     log_mult_vs_neutral_div: float,
     log_div_vs_neutral_mult: float,
     log_forget_vs_neutral: float,
-    sum_mult: float,
-    sum_div: float,
-    sum_neutral: float,
-    log_tau: float = 0.15,
+    mean_mult: float,
+    mean_div: float,
+    mean_neutral: float,
+    min_log_ratio: float = 0.15,
 ) -> str:
-    """Heuristic role from group-sum log-ratios (not top-k dominance)."""
-    total = sum_mult + sum_div + sum_neutral
+    """Heuristic role from mean-based log-ratios (not top-k dominance)."""
+    total = mean_mult + mean_div + mean_neutral
     if total < 1e-9:
         return "low_signal"
 
-    if log_forget_vs_neutral >= log_tau:
-        if log_mult_vs_neutral_div >= log_tau and log_mult_vs_neutral_div >= log_div_vs_neutral_mult:
+    if log_forget_vs_neutral >= min_log_ratio:
+        if log_mult_vs_neutral_div >= min_log_ratio and log_mult_vs_neutral_div >= log_div_vs_neutral_mult:
             return "mult_forget"
-        if log_div_vs_neutral_mult >= log_tau and log_div_vs_neutral_mult > log_mult_vs_neutral_div:
+        if log_div_vs_neutral_mult >= min_log_ratio and log_div_vs_neutral_mult > log_mult_vs_neutral_div:
             return "div_forget"
         return "forget_mixed"
 
-    if log_mult_vs_neutral_div >= log_tau and log_mult_vs_neutral_div >= log_div_vs_neutral_mult:
+    if log_mult_vs_neutral_div >= min_log_ratio and log_mult_vs_neutral_div >= log_div_vs_neutral_mult:
         return "mult_lean"
-    if log_div_vs_neutral_mult >= log_tau:
+    if log_div_vs_neutral_mult >= min_log_ratio:
         return "div_lean"
 
-    if log_forget_vs_neutral <= -log_tau:
+    if log_forget_vs_neutral <= -min_log_ratio:
         return "neutral_lean"
 
     return "weak_mixed"
@@ -105,7 +105,7 @@ def _assign_role_label(
 
 def plot_layer_concept_trends(results_dir: str):
     """
-    Aggregates supervised analysis from all layers and plots trends (group-sum log-ratios).
+    Aggregates supervised analysis from all layers and plots trends (prompt-mean log-ratios).
     """
     results_path = Path(results_dir)
     all_data = []
@@ -196,21 +196,23 @@ def analyze_features_supervised(
         role_assignment_threshold: float = 0.15,
 ) -> Dict[int, Dict[str, Any]]:
     """
-    For each latent, compute group-sum log-ratios (neutral / mult / div).
+    For each latent, compute **prompt-mean** log-ratios (neutral / mult / div).
 
-    Each prompt contributes only its single maximum-activation token (per latent) to
-    the group sums, removing prompt-length bias in the log-ratio computations.
+    Each prompt contributes only its single maximum-activation token (per latent),
+    and log-ratios are computed from *mean* activation per prompt in each group,
+    so class sample-count imbalance (e.g. more forget than neutral prompts) does not
+    skew the comparisons.
 
-    - log(mult / (neutral + div))
-    - log(div / (neutral + mult))
-    - log((mult + div) / neutral)
+    - log(mean(mult) / mean(neutral + div))
+    - log(mean(div) / mean(neutral + mult))
+    - log(mean(mult + div) / mean(neutral))
 
     Also records activation stats, column energy share, and first right-singular-vector loading
-    (one SVD of G per call). For the top ``context_top_n`` max- and min-activation tokens,
+    (one SVD of G per call). For the top ``context_top_n`` max- and min-activation prompts,
     logs lists of local window strings only (``context_window`` tokens each side, same sample),
     peak marked with ``**...**``.
     """
-    print("Profiling latents (supervised, group-sum log-ratios)...")
+    print("Profiling latents (supervised, prompt-mean log-ratios)...")
 
     n_tokens, n_latents = feature_acts.shape
     sample_ids_arr = np.asarray(sample_ids)
@@ -241,6 +243,10 @@ def analyze_features_supervised(
     is_neutral = np.isin(sample_labels_sup, list(retain_labels))
     is_mult = np.isin(sample_labels_sup, list(mult_labels))
     is_div = np.isin(sample_labels_sup, list(div_labels))
+    n_neutral = int(np.sum(is_neutral))
+    n_mult = int(np.sum(is_mult))
+    n_div = int(np.sum(is_div))
+    n_forget = n_mult + n_div
 
     # Reduce each prompt to one peak token per latent:
     # max for positive context/log-sums, and min for negative context display.
@@ -272,21 +278,30 @@ def analyze_features_supervised(
         sum_div = float(np.sum(col_max[is_div]))
         sum_forget = sum_mult + sum_div
 
-        others_for_mult = sum_neutral + sum_div
-        others_for_div = sum_neutral + sum_mult
+        # Convert group sums -> mean activation per prompt, to remove class-count bias.
+        mean_neutral = sum_neutral / n_neutral if n_neutral > 0 else 0.0
+        mean_mult = sum_mult / n_mult if n_mult > 0 else 0.0
+        mean_div = sum_div / n_div if n_div > 0 else 0.0
+        mean_forget = sum_forget / n_forget if n_forget > 0 else 0.0
 
-        log_mult_vs_neutral_div = _log_ratio(sum_mult, others_for_mult)
-        log_div_vs_neutral_mult = _log_ratio(sum_div, others_for_div)
-        log_forget_vs_neutral = _log_ratio(sum_forget, sum_neutral)
+        n_neutral_plus_div = n_neutral + n_div
+        n_neutral_plus_mult = n_neutral + n_mult
+
+        mean_neutral_plus_div = (sum_neutral + sum_div) / n_neutral_plus_div if n_neutral_plus_div > 0 else 0.0
+        mean_neutral_plus_mult = (sum_neutral + sum_mult) / n_neutral_plus_mult if n_neutral_plus_mult > 0 else 0.0
+
+        log_mult_vs_neutral_div = _log_ratio(mean_mult, mean_neutral_plus_div)
+        log_div_vs_neutral_mult = _log_ratio(mean_div, mean_neutral_plus_mult)
+        log_forget_vs_neutral = _log_ratio(mean_forget, mean_neutral)
 
         role_label = _assign_role_label(
             log_mult_vs_neutral_div,
             log_div_vs_neutral_mult,
             log_forget_vs_neutral,
-            sum_mult,
-            sum_div,
-            sum_neutral,
-            log_tau=role_assignment_threshold,
+            mean_mult,
+            mean_div,
+            mean_neutral,
+            min_log_ratio=role_assignment_threshold,
         )
 
         col_sq = float(np.sum(col ** 2))
@@ -298,16 +313,28 @@ def analyze_features_supervised(
                 "div": round(sum_div, 6),
                 "forget": round(sum_forget, 6),
             },
+            "group_counts": {
+                "neutral": n_neutral,
+                "mult": n_mult,
+                "div": n_div,
+                "forget": n_forget,
+            },
+            "group_means": {
+                "neutral": round(mean_neutral, 6),
+                "mult": round(mean_mult, 6),
+                "div": round(mean_div, 6),
+                "forget": round(mean_forget, 6),
+            },
             "log_ratios": {
                 "log_mult_vs_neutral_div": round(log_mult_vs_neutral_div, 6),
                 "log_div_vs_neutral_mult": round(log_div_vs_neutral_mult, 6),
                 "log_forget_vs_neutral": round(log_forget_vs_neutral, 6),
             },
             "activation_stats": {
-                "mean": round(float(np.mean(col)), 6),
-                "max": round(float(np.max(col)), 6),
-                "std": round(float(np.std(col)), 6),
-                "sum_abs": round(float(np.sum(np.abs(col))), 6),
+                "mean": round(float(np.mean(col_max)), 6),
+                "max": round(float(np.max(col_max)), 6),
+                "std": round(float(np.std(col_max)), 6),
+                "sum_abs": round(float(np.sum(np.abs(col_max))), 6),
             },
             "column_frobenius_fraction": round(col_sq / frob_sq, 8),
             "svd_top_right_loading": round(float(svd_row0[latent_idx]), 8)
