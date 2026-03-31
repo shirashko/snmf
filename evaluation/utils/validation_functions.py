@@ -152,13 +152,16 @@ def get_arithmetic_eval_fn(
     eng_valid_ds = load_dataset("json", data_files=eng_valid_file, split="train", cache_dir=dataset_cache_dir)
     print_message = accelerator.is_main_process
     print_acc(f"[validation_functions.py] Eng validation dataset size: {len(eng_valid_ds)}", print_message)
-    eng_valid_ds = eng_valid_ds.remove_columns("text")
+    # Rebuild examples with only model-input fields and drop all original
+    # columns (e.g., loss_mask), otherwise HF keeps untouched columns.
+    original_columns = eng_valid_ds.column_names
     eng_valid_ds = eng_valid_ds.map(
         lambda examples: {
             "input_ids": [ids[:max_length] for ids in examples["input_ids"]],
             "attention_mask": [mask[:max_length] for mask in examples["attention_mask"]],
         },
-        batched=True
+        batched=True,
+        remove_columns=original_columns,
     )
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, padding="max_length", max_length=max_length)
     eng_valid_loader = DataLoader(eng_valid_ds, batch_size=batch_size, shuffle=False, collate_fn=data_collator)
