@@ -40,6 +40,7 @@ local_models/
 
 # Hugging Face & common ML caches
 .cache/
+cache/
 huggingface/
 
 # Pip temp dirs when TMPDIR/cwd pointed at repo (build/unpack leftovers)
