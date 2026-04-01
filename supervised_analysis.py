@@ -8,6 +8,8 @@ import seaborn as sns
 from pathlib import Path
 import json
 
+from utils import sorted_numeric_layer_dirs
+
 MULT_LABEL = "mult_concept"
 DIV_LABEL = "div_concept"
 RETAIN_LABEL = "neutral"
@@ -103,6 +105,52 @@ def _assign_role_label(
     return "weak_mixed"
 
 
+# Short descriptions for supervised `role_label` values (prompt-mean log-ratios heuristic).
+ROLE_LABEL_MEANINGS: Dict[str, str] = {
+    "mult_forget": (
+        "Forget signal is strong, among forget prompts, multiplication concept dominates "
+        "division vs neutral+div baseline."
+    ),
+    "div_forget": (
+        "Forget signal is strong, among forget prompts, division concept dominates "
+        "multiplication vs neutral+mult baseline."
+    ),
+    "forget_mixed": (
+        "Forget prompts activate this latent more than neutral, but mult vs div separation "
+        "does not clear the threshold (mixed forget role)."
+    ),
+    "mult_lean": (
+        "Stronger on mult than on neutral+div, without the full forget-vs-neutral gate "
+        "(lean toward multiplication-related prompts)."
+    ),
+    "div_lean": (
+        "Stronger on div than on neutral+mult (lean toward division-related prompts)."
+    ),
+    "neutral_lean": (
+        "Retain/neutral prompts show higher mean peak activation than forget groups "
+        "(latent aligns more with retained content)."
+    ),
+    "weak_mixed": (
+        "Log-ratios are small; no clear directional assignment under the current threshold."
+    ),
+    "low_signal": (
+        "Negligible combined activation across supervised groups (no reliable role)."
+    ),
+}
+
+# Stable order for reporting counts (unknown labels still included dynamically).
+ROLE_LABEL_ORDER: Tuple[str, ...] = (
+    "mult_forget",
+    "div_forget",
+    "forget_mixed",
+    "mult_lean",
+    "div_lean",
+    "neutral_lean",
+    "weak_mixed",
+    "low_signal",
+)
+
+
 def plot_layer_concept_trends(results_dir: str):
     """
     Aggregates supervised analysis from all layers and plots trends (prompt-mean log-ratios).
@@ -110,8 +158,7 @@ def plot_layer_concept_trends(results_dir: str):
     results_path = Path(results_dir)
     all_data = []
 
-    for layer_folder in sorted(results_path.glob("layer_*"), key=lambda x: int(x.name.split('_')[1])):
-        layer_idx = int(layer_folder.name.split('_')[1])
+    for layer_idx, layer_folder in sorted_numeric_layer_dirs(results_path):
         json_file = layer_folder / "feature_analysis_supervised.json"
 
         if not json_file.exists():

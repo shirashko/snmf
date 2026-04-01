@@ -3,10 +3,24 @@ import json
 import torch
 from pathlib import Path
 
-from utils import resolve_device, set_seed
+from utils import resolve_device, set_seed, sorted_numeric_layer_dirs
 from model_utils import load_local_model
-from supervised_analysis import analyze_features_supervised, plot_layer_concept_trends
+from collections import Counter
+
+from supervised_analysis import (
+    ROLE_LABEL_MEANINGS,
+    ROLE_LABEL_ORDER,
+    analyze_features_supervised,
+    plot_layer_concept_trends,
+)
 from unsupervised_analysis import analyze_features_unsupervised
+
+ANALYSIS_OVERVIEW = (
+    "Each SNMF column is one latent feature. Supervised profiling compares mean peak "
+    "activation per prompt across label groups (neutral vs mult vs div), then assigns "
+    "a role_label when log-ratios exceed --role-assignment-threshold. "
+    "Counts below are how many latents received each label, per layer and in total."
+)
 
 
 def main():
@@ -36,6 +50,12 @@ def main():
         default=15,
         help="Tokens before/after the peak token in each logged context (same sample only).",
     )
+    parser.add_argument(
+        "--summary-filename",
+        type=str,
+        default="analysis_summary.json",
+        help="Written under --results-dir: feature counts, role breakdown, and role meanings.",
+    )
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
@@ -45,12 +65,14 @@ def main():
     print(f"Loading model from {args.model_path}...")
     local_model = load_local_model(args.model_path, device=device)
 
-    for layer_folder in sorted(results_dir.glob("layer_*")):
-        layer_num = int(layer_folder.name.split("_")[1])
+    per_layer_stats: list[dict] = []
+    global_role_counts: Counter[str] = Counter()
+
+    for layer_num, layer_folder in sorted_numeric_layer_dirs(results_dir):
         factors_path = layer_folder / "snmf_factors.pt"
 
         if not factors_path.exists():
-            print(f"Skipping layer {layer_num} because it doesn't exist.")
+            print(f"Skipping layer {layer_num} because snmf_factors.pt is missing.")
             continue
 
         output_json_path = layer_folder / "feature_analysis_supervised.json"
@@ -76,6 +98,23 @@ def main():
         with open(output_json_path, "w", encoding="utf-8") as f:
             json.dump(supervised_results, f, indent=2, ensure_ascii=False)
 
+        n_features = len(supervised_results)
+        layer_roles = Counter(
+            supervised_results[k].get("role_label", "unknown") for k in supervised_results
+        )
+        global_role_counts.update(layer_roles)
+        per_layer_stats.append(
+            {
+                "layer": layer_num,
+                "features_explored": n_features,
+                "counts_by_role": dict(layer_roles),
+            }
+        )
+        print(
+            f"  Layer {layer_num}: {n_features} latents | roles: "
+            + ", ".join(f"{r}={c}" for r, c in sorted(layer_roles.items()))
+        )
+
         # Unsupervised Vocabulary Projection (Logit Lens)
         if not args.skip_vocab:
             unsupervised_results = analyze_features_unsupervised(
@@ -94,6 +133,41 @@ def main():
     except Exception as e:
         print(f"Could not generate plots: {e}")
 
+    total_features = sum(s["features_explored"] for s in per_layer_stats)
+    summary_path = results_dir / args.summary_filename
+    ordered_global: dict[str, int] = {r: global_role_counts.get(r, 0) for r in ROLE_LABEL_ORDER}
+    for label, c in global_role_counts.items():
+        if label not in ordered_global:
+            ordered_global[label] = c
+
+    summary_doc = {
+        "overview": ANALYSIS_OVERVIEW,
+        "role_assignment_threshold": args.role_assignment_threshold,
+        "threshold_note": (
+            "Minimum natural-log ratio margin for a strong role vs weak_mixed / neutral_lean; "
+            "see supervised_analysis._assign_role_label."
+        ),
+        "total_features_explored": total_features,
+        "layers_processed": len(per_layer_stats),
+        "global_counts_by_role": ordered_global,
+        "per_layer": per_layer_stats,
+        "role_meanings": ROLE_LABEL_MEANINGS,
+    }
+
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary_doc, f, indent=2, ensure_ascii=False)
+
+    print("\n--- Global role counts (all layers) ---")
+    for r in ROLE_LABEL_ORDER:
+        c = global_role_counts.get(r, 0)
+        if c:
+            print(f"  {r}: {c}")
+    for r, c in sorted(global_role_counts.items()):
+        if r not in ROLE_LABEL_ORDER:
+            print(f"  {r}: {c}")
+
+    print(f"\nTotal latents profiled: {total_features}")
+    print(f"Wrote summary config: {summary_path}")
     print(f"\nAnalysis complete. Files saved in {args.results_dir}")
 
 

@@ -2,6 +2,7 @@ import os
 import re
 import pickle
 import warnings
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
@@ -90,6 +91,27 @@ def _safe_tokens(tokens: Sequence[str]) -> List[str]:
 # ---------------------------------------------------------------------------
 # Path & IO Management
 # ---------------------------------------------------------------------------
+
+_LAYER_DIR_RE = re.compile(r"^layer_(\d+)$")
+
+
+def sorted_numeric_layer_dirs(results_dir: Path) -> List[Tuple[int, Path]]:
+    """
+    Subdirectories of ``results_dir`` named ``layer_<integer>`` only.
+
+    Skips files (e.g. ``layer_concept_trends.png``) and non-numeric names
+    (e.g. ``layer_concept``) that would otherwise match a naive ``layer_*`` glob.
+    """
+    found: List[Tuple[int, Path]] = []
+    for p in results_dir.iterdir():
+        if not p.is_dir():
+            continue
+        m = _LAYER_DIR_RE.match(p.name)
+        if m:
+            found.append((int(m.group(1)), p))
+    found.sort(key=lambda t: t[0])
+    return found
+
 
 def get_pipeline_path(
         outdir: str, model_safe: str, file_type: str, rank: int, n_samples: int,

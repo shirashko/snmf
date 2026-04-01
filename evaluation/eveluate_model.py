@@ -39,8 +39,11 @@ def run_standalone_eval(
     dataset_cache_dir="./cache",
     eng_valid_file="data/valid_eng.jsonl",
 ):
-    accelerator = Accelerator()
     resolved_device = resolve_eval_device(device)
+    # When we load the model on CPU (e.g. sm_61 GPU + PyTorch sm_70+ wheels), the default
+    # Accelerator still prepares dataloaders for CUDA if a GPU is visible, causing
+    # "index on cuda, weights on cpu" in embedding. Force CPU placement when resolved_device is cpu.
+    accelerator = Accelerator(cpu=(resolved_device == "cpu"))
     dtype = torch.bfloat16 if resolved_device != "cpu" else torch.float32
     
     # Load model and tokenizer

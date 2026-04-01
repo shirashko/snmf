@@ -25,6 +25,10 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 
 mkdir -p logs $HF_HOME
 
+# --- Analysis I/O ---
+RESULTS_DIR="${RESULTS_DIR:-outputs/snmf_train_results}"
+SUMMARY_FILE="${SUMMARY_FILE:-analysis_summary.json}"
+
 # --- Parallelism Optimization ---
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
@@ -32,12 +36,15 @@ export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
 # --- Execute Analysis ---
 echo "--------------------------------------------------------"
 echo "Starting SNMF results analysis on Node: $SLURMD_NODENAME"
+echo "Results directory: $RESULTS_DIR"
+echo "Per-run summary (counts + role meanings): $RESULTS_DIR/$SUMMARY_FILE"
 echo "--------------------------------------------------------"
 
 python analyze_snmf_results.py \
     --model-path "local_models/gemma-2-0.3B_reference_model" \
-    --results-dir "outputs/snmf_train_results_02" \
-    --role-assignment-threshold 0.15 \
+    --results-dir "$RESULTS_DIR" \
+    --summary-filename "$SUMMARY_FILE" \
+    --role-assignment-threshold 0.05 \
     --device "auto" \
     --seed 42 \
     --top-k-unsupervised 30 \
@@ -47,3 +54,4 @@ python analyze_snmf_results.py \
 
 echo "--------------------------------------------------------"
 echo "SNMF analysis finished"
+echo "Feature counts and role definitions: $RESULTS_DIR/$SUMMARY_FILE"
