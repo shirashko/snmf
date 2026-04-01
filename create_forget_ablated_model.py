@@ -132,6 +132,13 @@ def parse_args() -> argparse.Namespace:
         help="Directory for save_pretrained (default: sibling of reference model).",
     )
     p.add_argument(
+        "--save-path-random",
+        type=str,
+        default="",
+        help="Optional directory for random-direction ablated model. "
+        "Default: <save-path>_random_baseline.",
+    )
+    p.add_argument(
         "--forget-roles",
         type=str,
         nargs="+",
@@ -142,6 +149,17 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1e-6,
         help="Tikhonov on Z^T Z when building the span projector (stability).",
+    )
+    p.add_argument(
+        "--random-baseline",
+        action="store_true",
+        help="Also run matched-count random-direction ablation baseline.",
+    )
+    p.add_argument(
+        "--random-seed",
+        type=int,
+        default=1234,
+        help="Seed for reproducible random-direction baseline.",
     )
     p.add_argument(
         "--device",
@@ -227,6 +245,113 @@ def _print_eval_comparison(before: Dict[str, Any], after: Dict[str, Any]) -> Non
             print(f"  {k}: before={b!r}  after={a!r}")
 
 
+def _random_direction_matrix(
+    d_mlp: int,
+    n_dirs: int,
+    *,
+    seed: int,
+    layer_idx: int,
+) -> torch.Tensor:
+    """
+    Build a random orthonormal-basis subset Z in R^(d_mlp x n_dirs).
+    """
+    if n_dirs <= 0:
+        return torch.empty((d_mlp, 0), dtype=torch.float32)
+    if n_dirs > d_mlp:
+        raise ValueError(f"Requested n_dirs={n_dirs} but d_mlp={d_mlp}.")
+    gen = torch.Generator(device="cpu")
+    gen.manual_seed(int(seed) + int(layer_idx))
+    rnd = torch.randn((d_mlp, n_dirs), generator=gen, dtype=torch.float64)
+    q, _ = torch.linalg.qr(rnd, mode="reduced")
+    return q.to(dtype=torch.float32, device="cpu")
+
+
+def _apply_ablation_to_model(
+    model_path: str,
+    results_dir: Path,
+    forget_roles: Set[str],
+    ridge_lambda: float,
+    device: str,
+    random_baseline: bool,
+    random_seed: int,
+) -> tuple[object, Dict[str, object]]:
+    """
+    Load model, apply either learned-direction or random-direction ablation.
+    Returns (local_model_wrapper, metadata).
+    """
+    local = load_local_model(model_path, device=device)
+    model = local.model
+    base = getattr(model, "model", model)
+    d_mlp = local.d_mlp
+
+    meta: Dict[str, object] = {
+        "model_path": model_path,
+        "results_dir": str(results_dir),
+        "forget_roles": sorted(forget_roles),
+        "ridge_lambda": ridge_lambda,
+        "ablation_type": "random_matched_count" if random_baseline else "learned_forget_directions",
+        "random_seed": int(random_seed) if random_baseline else None,
+        "layers": [],
+    }
+
+    for _layer_num, layer_dir in sorted_numeric_layer_dirs(results_dir):
+        Z_learned = _forget_feature_matrix(layer_dir, forget_roles)
+        if Z_learned is None:
+            continue
+
+        layer_idx = int(layer_dir.name.split("_")[-1])
+        if Z_learned.shape[0] != d_mlp:
+            raise ValueError(
+                f"Layer {layer_idx}: F rows {Z_learned.shape[0]} != model d_mlp {d_mlp}. "
+                "Train SNMF with the same architecture / mlp_intermediate as this model."
+            )
+        n_forget = int(Z_learned.shape[1])
+        Z = (
+            _random_direction_matrix(d_mlp, n_forget, seed=random_seed, layer_idx=layer_idx)
+            if random_baseline
+            else Z_learned
+        )
+
+        down = base.layers[layer_idx].mlp.down_proj
+        w = down.weight.data  # (d_model, d_mlp)
+        dtype = w.dtype
+        dev = w.device
+
+        # Projector on CPU (float64): avoids CUDA on GPUs where PyTorch has no kernels (e.g. sm_61).
+        z_cpu = Z.to(device="cpu", dtype=torch.float64)
+        p_perp_cpu = orthogonal_projector_complement(z_cpu, ridge_lambda=ridge_lambda)
+        p_perp = p_perp_cpu.to(device=dev, dtype=dtype)
+
+        # W_V^{new} = W_V @ P_perp
+        with torch.no_grad():
+            w.copy_(torch.mm(w, p_perp))
+
+        layer_meta = {
+            "layer": layer_idx,
+            "n_forget_columns": n_forget,
+            "d_mlp": int(d_mlp),
+        }
+        if random_baseline:
+            layer_meta["random_seed"] = int(random_seed) + int(layer_idx)
+        meta["layers"].append(layer_meta)
+        if random_baseline:
+            print(
+                f"Layer {layer_idx}: removed span of {n_forget} RANDOM direction(s) "
+                f"(matched to forget count) via W_V @ P_perp."
+            )
+        else:
+            print(
+                f"Layer {layer_idx}: removed span of {n_forget} forget SNMF column(s) "
+                f"via W_V @ P_perp."
+            )
+
+    if not meta["layers"]:
+        raise RuntimeError(
+            f"No forget features found under {results_dir} for roles={sorted(forget_roles)}."
+        )
+    return local, meta
+
+
 def main() -> None:
     args = parse_args()
     results_dir = Path(args.results_dir)
@@ -252,65 +377,19 @@ def main() -> None:
 
     ablation_device = resolve_device(args.device)
     print(f"Ablation model load device (after resolve): {ablation_device}")
-    local = load_local_model(args.model_path, device=ablation_device)
-    model = local.model
-    base = getattr(model, "model", model)
-
-    meta: Dict[str, object] = {
-        "model_path": args.model_path,
-        "results_dir": str(results_dir),
-        "forget_roles": sorted(forget_roles),
-        "ridge_lambda": args.ridge_lambda,
-        "layers": [],
-    }
-
-    for _layer_num, layer_dir in sorted_numeric_layer_dirs(results_dir):
-        Z = _forget_feature_matrix(layer_dir, forget_roles)
-        if Z is None:
-            continue
-
-        layer_idx = int(layer_dir.name.split("_")[-1])
-        d_mlp = local.d_mlp
-        if Z.shape[0] != d_mlp:
-            raise ValueError(
-                f"Layer {layer_idx}: F rows {Z.shape[0]} != model d_mlp {d_mlp}. "
-                "Train SNMF with the same architecture / mlp_intermediate as this model."
-            )
-
-        down = base.layers[layer_idx].mlp.down_proj
-        w = down.weight.data  # (d_model, d_mlp)
-        dtype = w.dtype
-        dev = w.device
-
-        # Projector on CPU (float64): avoids CUDA on GPUs where PyTorch has no kernels (e.g. sm_61).
-        z_cpu = Z.to(device="cpu", dtype=torch.float64)
-        p_perp_cpu = orthogonal_projector_complement(z_cpu, ridge_lambda=args.ridge_lambda)
-        p_perp = p_perp_cpu.to(device=dev, dtype=dtype)
-
-        # W_V^{new} = W_V @ P_perp
-        with torch.no_grad():
-            w.copy_(torch.mm(w, p_perp))
-
-        meta["layers"].append(
-            {
-                "layer": layer_idx,
-                "n_forget_columns": int(Z.shape[1]),
-                "d_mlp": int(d_mlp),
-            }
-        )
-        print(
-            f"Layer {layer_idx}: removed span of {Z.shape[1]} forget SNMF column(s) "
-            f"via W_V @ P_perp."
-        )
-
-    if not meta["layers"]:
-        raise RuntimeError(
-            f"No forget features found under {results_dir} for roles={sorted(forget_roles)}."
-        )
+    local, meta = _apply_ablation_to_model(
+        model_path=args.model_path,
+        results_dir=results_dir,
+        forget_roles=forget_roles,
+        ridge_lambda=args.ridge_lambda,
+        device=ablation_device,
+        random_baseline=False,
+        random_seed=args.random_seed,
+    )
 
     save_path = Path(args.save_path)
     save_path.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(save_path)
+    local.model.save_pretrained(save_path)
     local.tokenizer.save_pretrained(save_path)
     print(f"Saved edited model and tokenizer to {save_path}")
 
@@ -322,7 +401,7 @@ def main() -> None:
         print(f"Wrote metadata to {out}")
 
     # Drop ablation model from memory before loading again for eval.
-    del local, model
+    del local
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -356,6 +435,59 @@ def main() -> None:
         with open(eval_out, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         print(f"Wrote eval comparison JSON to {eval_out}")
+
+    if args.random_baseline:
+        print("\n=== Random baseline ablation (matched direction count) ===")
+        local_rand, rand_meta = _apply_ablation_to_model(
+            model_path=args.model_path,
+            results_dir=results_dir,
+            forget_roles=forget_roles,
+            ridge_lambda=args.ridge_lambda,
+            device=ablation_device,
+            random_baseline=True,
+            random_seed=args.random_seed,
+        )
+        save_path_random = (
+            Path(args.save_path_random)
+            if args.save_path_random
+            else Path(f"{args.save_path}_random_baseline")
+        )
+        save_path_random.mkdir(parents=True, exist_ok=True)
+        local_rand.model.save_pretrained(save_path_random)
+        local_rand.tokenizer.save_pretrained(save_path_random)
+        print(f"Saved random-baseline model and tokenizer to {save_path_random}")
+
+        del local_rand
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        if not args.skip_eval:
+            print("\n=== Post-random-baseline eval (saved checkpoint) ===")
+            results_random = run_standalone_eval(
+                str(save_path_random),
+                device=args.eval_device,
+                batch_size=args.eval_batch_size,
+                max_length=args.eval_max_length,
+                cache_dir=args.eval_cache_dir,
+                dataset_cache_dir=args.eval_dataset_cache_dir,
+                eng_valid_file=args.eval_eng_valid_file,
+            )
+            assert results_before is not None and results_after is not None
+            print("\n--- Learned-direction ablation vs random baseline ---")
+            _print_eval_comparison(results_after, results_random)
+            print("\n--- Original baseline vs random baseline ---")
+            _print_eval_comparison(results_before, results_random)
+
+            payload["random_baseline"] = {
+                "random_seed": int(args.random_seed),
+                "ablated_model_path": str(save_path_random),
+                "metadata": rand_meta,
+                "after": _summarize_eval(results_random),
+            }
+            with open(eval_out, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            print(f"Updated eval comparison JSON with random baseline at {eval_out}")
 
 
 if __name__ == "__main__":

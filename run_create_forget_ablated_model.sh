@@ -29,8 +29,10 @@ mkdir -p logs $HF_HOME
 MODEL_PATH="${MODEL_PATH:-local_models/gemma-2-0.3B_reference_model}"
 RESULTS_DIR="${RESULTS_DIR:-outputs/snmf_train_results}"
 SAVE_PATH="${SAVE_PATH:-local_models/gemma-2-0.3B_forget_ablated}"
+SAVE_PATH_RANDOM="${SAVE_PATH_RANDOM:-${SAVE_PATH}_random_baseline}"
 METADATA_OUT="${METADATA_OUT:-${RESULTS_DIR}/forget_ablation_metadata.json}"
 RIDGE_LAMBDA="${RIDGE_LAMBDA:-1e-6}"
+RANDOM_SEED="${RANDOM_SEED:-1234}"
 
 # Weight-edit pass: auto uses utils.resolve_device (CPU on sm_61 + sm_70+ PyTorch wheels).
 # Force cuda only on supported GPUs: ABLATION_DEVICE=cuda
@@ -44,6 +46,8 @@ EVAL_DATASET_CACHE_DIR="${EVAL_DATASET_CACHE_DIR:-./cache}"
 EVAL_ENG_VALID_FILE="${EVAL_ENG_VALID_FILE:-data/valid_eng.jsonl}"
 # Set SKIP_EVAL=1 to skip before/after accuracy (faster).
 SKIP_EVAL="${SKIP_EVAL:-0}"
+# Set RANDOM_BASELINE=0 to disable random matched-count baseline.
+RANDOM_BASELINE="${RANDOM_BASELINE:-1}"
 
 # Space-separated role names (same defaults as create_forget_ablated_model.py).
 FORGET_ROLES="${FORGET_ROLES:-mult_forget div_forget forget_mixed}"
@@ -58,15 +62,24 @@ echo "Forget ablation + optional eval on Node: $SLURMD_NODENAME"
 echo "Base model:        $MODEL_PATH"
 echo "SNMF results dir:  $RESULTS_DIR"
 echo "Save ablated to:   $SAVE_PATH"
+echo "Save random to:    $SAVE_PATH_RANDOM"
 echo "Metadata JSON:     $METADATA_OUT"
 echo "Forget roles:      $FORGET_ROLES"
 echo "Ablation device:   $ABLATION_DEVICE | Eval device: $EVAL_DEVICE"
+echo "Random baseline:   $RANDOM_BASELINE | Random seed: $RANDOM_SEED"
 echo "Skip eval:         $SKIP_EVAL"
 echo "--------------------------------------------------------"
 
 EVAL_ARGS=()
 if [[ "$SKIP_EVAL" == "1" ]]; then
   EVAL_ARGS+=(--skip-eval)
+fi
+
+RANDOM_ARGS=()
+if [[ "$RANDOM_BASELINE" == "1" ]]; then
+  RANDOM_ARGS+=(--random-baseline)
+  RANDOM_ARGS+=(--save-path-random "$SAVE_PATH_RANDOM")
+  RANDOM_ARGS+=(--random-seed "$RANDOM_SEED")
 fi
 
 python create_forget_ablated_model.py \
@@ -83,10 +96,12 @@ python create_forget_ablated_model.py \
   --eval-cache-dir "$EVAL_CACHE_DIR" \
   --eval-dataset-cache-dir "$EVAL_DATASET_CACHE_DIR" \
   --eval-eng-valid-file "$EVAL_ENG_VALID_FILE" \
+  "${RANDOM_ARGS[@]}" \
   "${EVAL_ARGS[@]}"
 
 echo "--------------------------------------------------------"
 echo "Forget ablation job finished"
 echo "Checkpoint: $SAVE_PATH"
+echo "Random checkpoint (if enabled): $SAVE_PATH_RANDOM"
 echo "Eval comparison (if run): $SAVE_PATH/ablation_eval_comparison.json"
 echo "--------------------------------------------------------"
