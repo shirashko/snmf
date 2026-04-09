@@ -1,7 +1,12 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from accelerate import Accelerator
-from evaluation.utils.validation_functions import get_arithmetic_eval_fn
+from evaluation.utils.validation_functions import (
+    get_arithmetic_eval_fn,
+    get_both_wmdp_eval_fn,
+    get_wmdp_bio_eval_fn,
+    get_wmdp_cyber_eval_fn,
+)
 import argparse
 import json
 import os
@@ -32,6 +37,9 @@ def resolve_eval_device(requested_device: str) -> str:
 
 def run_standalone_eval(
     model_path,
+    eval_mode="arithmetic",
+    large_eval=False,
+    no_mmlu=False,
     device="cuda",
     batch_size=16,
     max_length=256,
@@ -52,19 +60,41 @@ def run_standalone_eval(
         dtype=dtype,
         device_map=resolved_device
     )
-    
-    # Configuration for the evaluation factory
-    # Note: Ensure paths to validation files exist
-    eval_factory = get_arithmetic_eval_fn(
-        model_name=model_path,
-        batch_size=batch_size,
-        max_length=max_length,
-        cache_dir=cache_dir,
-        dataset_cache_dir=dataset_cache_dir,
-        num_wiki_batches=50,
-        eng_valid_file=eng_valid_file, # Required for CE loss check
-        accelerator=accelerator
-    )
+
+    if eval_mode == "arithmetic":
+        # Configuration for arithmetic evaluation
+        # Note: Ensure paths to validation files exist
+        eval_factory = get_arithmetic_eval_fn(
+            model_name=model_path,
+            batch_size=batch_size,
+            max_length=max_length,
+            cache_dir=cache_dir,
+            dataset_cache_dir=dataset_cache_dir,
+            num_wiki_batches=50,
+            eng_valid_file=eng_valid_file,  # Required for CE loss check
+            accelerator=accelerator
+        )
+    elif eval_mode == "wmdp_bio":
+        eval_factory = get_wmdp_bio_eval_fn(
+            accelerator=accelerator,
+            large_eval=large_eval,
+            no_mmlu=no_mmlu,
+        )
+    elif eval_mode == "wmdp_cyber":
+        eval_factory = get_wmdp_cyber_eval_fn(
+            accelerator=accelerator,
+            large_eval=large_eval,
+            no_mmlu=no_mmlu,
+        )
+    elif eval_mode == "both_wmdp":
+        if no_mmlu:
+            print("[eveluate_model.py] --no-mmlu is ignored for eval-mode=both_wmdp.")
+        eval_factory = get_both_wmdp_eval_fn(
+            accelerator=accelerator,
+            large_eval=large_eval,
+        )
+    else:
+        raise ValueError(f"Unknown eval_mode: {eval_mode}")
     
     # Run the evaluation
     # This returns a dict with accuracy for each operation (e.g., 'val/addition_acc')
@@ -73,8 +103,24 @@ def run_standalone_eval(
     return results
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run standalone arithmetic + CE evaluation.")
+    parser = argparse.ArgumentParser(description="Run standalone arithmetic or WMDP evaluation.")
     parser.add_argument("--model-path", default="local_models/gemma-2-0.3B_reference_model")
+    parser.add_argument(
+        "--eval-mode",
+        default="arithmetic",
+        choices=["arithmetic", "wmdp_bio", "wmdp_cyber", "both_wmdp"],
+        help="Which evaluation pipeline to run.",
+    )
+    parser.add_argument(
+        "--large-eval",
+        action="store_true",
+        help="Use larger/full evaluation limits for WMDP/MMLU tasks.",
+    )
+    parser.add_argument(
+        "--no-mmlu",
+        action="store_true",
+        help="For single-domain WMDP modes, skip MMLU.",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--max-length", type=int, default=256)
@@ -86,6 +132,9 @@ if __name__ == "__main__":
 
     model_results = run_standalone_eval(
         model_path=args.model_path,
+        eval_mode=args.eval_mode,
+        large_eval=args.large_eval,
+        no_mmlu=args.no_mmlu,
         device=args.device,
         batch_size=args.batch_size,
         max_length=args.max_length,

@@ -372,3 +372,29 @@ def do_loss_eval(model, print_results, accelerator, forget_loader, retain_loader
 
 def get_loss_eval_fn(accelerator,):
     return lambda model, print_results, forget_loader, retain_loader: do_loss_eval(model, print_results, accelerator=accelerator, forget_loader=forget_loader, retain_loader=retain_loader)
+
+
+def get_wmdp_cyber_eval_fn(accelerator, large_eval, no_mmlu=False):
+    if no_mmlu:
+        lim = [None] if large_eval else [1000]
+        task_list = ["wmdp_cyber"]
+    else:
+        lim = [None, 0.40] if large_eval else [1000, .07]
+        task_list = ["wmdp_cyber", "mmlu"]    
+    seed = 1234 if large_eval else None
+    return lambda model, print_results: eval_model_lm_eval(model, print_results, seed=seed, accelerator=accelerator, task_list=task_list, limit=lim)
+
+def get_wmdp_bio_eval_fn(accelerator, large_eval, no_mmlu=False):
+    if no_mmlu:
+        lim = [None] if large_eval else [1000]
+        task_list = ["wmdp_bio"]
+    else:
+        lim = [None, 0.40] if large_eval else [1000, .07]
+        task_list = ["wmdp_bio", "mmlu"]
+    seed = 1234 if large_eval else None
+    return lambda model, print_results: eval_model_lm_eval(model, print_results, seed=seed, accelerator=accelerator, task_list=task_list, limit=lim)
+    
+def get_both_wmdp_eval_fn(accelerator, large_eval):
+    lim = [None, None, 0.40] if large_eval else [1000, 1000, .07]
+    seed = 1234 if large_eval else None
+    return lambda model, print_results: eval_model_lm_eval(model, print_results, seed=seed, accelerator=accelerator, task_list=["wmdp_bio", "wmdp_cyber", "mmlu"], limit=lim)

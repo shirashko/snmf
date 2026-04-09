@@ -128,6 +128,17 @@ def main():
     logger.info(f"Using device: {device}")
 
     model = load_local_model(model_path=args.model_path, device=device)
+    num_hidden_layers = int(model.n_layers)
+    invalid_layers = [layer for layer in layers if layer < 0 or layer >= num_hidden_layers]
+    if invalid_layers:
+        raise ValueError(
+            "Invalid layer indices requested: "
+            f"{invalid_layers}. Model has {num_hidden_layers} layers "
+            f"(valid indices: 0-{num_hidden_layers - 1})."
+        )
+    logger.info(
+        f"Model has {num_hidden_layers} layers; running SNMF for layer indices: {layers}"
+    )
 
     dataset = SupervisedConceptDataset(args.data_path)
     prompts, labels = dataset.get_data()
