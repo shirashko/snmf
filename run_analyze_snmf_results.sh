@@ -26,7 +26,8 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 mkdir -p logs $HF_HOME
 
 # --- Analysis I/O ---
-RESULTS_DIR="${RESULTS_DIR:-outputs/snmf_train_results}"
+# Default matches train_snmf.sh OUTPUT_DIR; set RESULTS_DIR=outputs/snmf_train_results to analyze an older tree.
+RESULTS_DIR="${RESULTS_DIR:-outputs/snmf_train_results_pipeline}"
 SUMMARY_FILE="${SUMMARY_FILE:-analysis_summary.json}"
 
 # --- Parallelism Optimization ---

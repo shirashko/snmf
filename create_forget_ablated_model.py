@@ -1,5 +1,5 @@
 """
-Build a new HF checkpoint whose MLP output projections remove SNMF forget directions.
+Build a new HF checkpoint whose MLP removes SNMF forget directions (dual-sided where applicable).
 
 Expected pipeline (matches the repo shell scripts):
 
@@ -8,25 +8,27 @@ Expected pipeline (matches the repo shell scripts):
      ``mlp.down_proj`` input).
   2. ``run_analyze_snmf_results.sh`` → writes ``layer_*/feature_analysis_supervised.json``
      (``role_label`` per latent, from ``analyze_snmf_results.py``).
-  3. This script → reads ``F`` + ``role_label``, applies ``W_V <- W_V @ P_perp``, saves a new model.
+  3. This script → reads ``F`` + ``role_label``, applies projections on MLP weights, saves a new model.
 
 Use the **same** ``--model-path`` as training/analysis and the **same** ``--results-dir``
 as ``--output-dir`` / ``RESULTS_DIR`` (default: ``outputs/snmf_train_results``).
 
 Mathematical setup (matches the cited write-up):
   - Each SNMF column z_i ∈ ℝ^{d_mlp} is a direction in the post-activation (neuron) space.
-  - The MLP output map is y = W_V @ x with x the intermediate activation (Gemma: down_proj).
-  - To stop any activation component along z_i from reaching the residual stream via W_V, use
-        W_V^{new} = W_V @ (I - P_i),
-    where P_i = z_i z_i^T / ||z_i||^2 is orthogonal projection onto span{z_i}.
+  - **Output side (down_proj):** y = W_V x with x ∈ ℝ^{d_mlp}. Remove forget span from x before W_V:
+        W_V^{new} = W_V @ P_perp.
+  - **Input / gate side (up_proj, gate_proj in Gemma-2):** these map ℝ^{d_model} → ℝ^{d_mlp}
+    with weight W of shape (d_mlp, d_model). Output lives in the same space as z, so remove the
+    span from the *output* of these layers:
+        W^{new} = P_perp @ W.
 
 For multiple forget features {z_1,…,z_k}, use the projector onto their span:
     P_span = Z (Z^T Z + λ I)^{-1} Z^T,   Z = [z_1 | … | z_k],
-    P_perp = I - P_span,
-    W_V^{new} = W_V @ P_perp.
+    P_perp = I - s P_span   (s = ``--span-projection-scale``; on-span scaling is (1-s)—s=1 removes
+    the span component; s>1 over-subtracts and can flip that component; see ``--span-projection-scale`` help).
 
-This edits weights only (no runtime hooks). Neurons are not zeroed; the subspace orthogonal
-to the forget directions is unchanged for how it maps through W_V.
+This edits weights only (no runtime hooks). Layers without ``gate_proj`` / ``up_proj`` only get
+``down_proj`` edits.
 """
 
 from __future__ import annotations
@@ -88,11 +90,15 @@ def _forget_feature_matrix(
 def orthogonal_projector_complement(
     Z: torch.Tensor,
     ridge_lambda: float,
+    *,
+    span_projection_scale: float = 1.0,
 ) -> torch.Tensor:
     """
-    P_perp = I - Z (Z^T Z + λ I)^{-1} Z^T  ∈ ℝ^{d×d}, with Z ∈ ℝ^{d×k}.
+    P_perp = I - s · Z (Z^T Z + λ I)^{-1} Z^T  ∈ ℝ^{d×d}, with Z ∈ ℝ^{d×k},
+    where s = span_projection_scale (coefficient on P_span).
 
-    For k=1 this equals I - z z^T / (||z||^2 + λ) (≈ paper formula when λ=0).
+    For s=1 this is the usual orthogonal complement projector. For k=1 and s=1 this equals
+    I - z z^T / (||z||^2 + λ) (≈ paper formula when λ=0).
     """
     d, k = Z.shape
     device, dtype = Z.device, Z.dtype
@@ -102,12 +108,13 @@ def orthogonal_projector_complement(
     g = Z.T @ Z + ridge_lambda * torch.eye(k, device=device, dtype=dtype)
     inv = torch.linalg.solve(g, torch.eye(k, device=device, dtype=dtype))
     p_span = Z @ inv @ Z.T
-    return I_d - p_span
+    return I_d - float(span_projection_scale) * p_span
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Apply W_V <- W_V @ P_perp to remove SNMF forget directions from MLP output.",
+        description="Remove SNMF forget directions: W_down <- W_down @ P_perp; "
+        "W_up,W_gate <- P_perp @ W when present.",
         epilog=(
             "Typical use after train_snmf.sh and run_analyze_snmf_results.sh: same defaults "
             "as those scripts (model + outputs/snmf_train_results)."
@@ -149,6 +156,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1e-6,
         help="Tikhonov on Z^T Z when building the span projector (stability).",
+    )
+    p.add_argument(
+        "--span-projection-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "Coefficient s on P_span in P_perp = I - s·P_span. On vectors in the forget span, "
+            "this acts as scaling by (1-s): s=1 removes that component entirely (orthogonal "
+            "complement); s<1 leaves a residual (softer removal); s>1 over-subtracts—(1-s) is "
+            "negative, so the span component is flipped and scaled in magnitude (e.g. s=2 gives "
+            "the opposite direction with equal norm). Default 1.0."
+        ),
     )
     p.add_argument(
         "--random-baseline",
@@ -218,6 +237,12 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Write before/after metrics JSON here (default: <save-path>/ablation_eval_comparison.json).",
     )
+    p.add_argument(
+        "--down-proj-only",
+        action="store_true",
+        help="Only ablate down_proj (W_V @ P_perp). Skip gate_proj/up_proj for ablations that "
+        "match the old single-sided behavior.",
+    )
     return p.parse_args()
 
 
@@ -274,6 +299,9 @@ def _apply_ablation_to_model(
     device: str,
     random_baseline: bool,
     random_seed: int,
+    *,
+    span_projection_scale: float = 1.0,
+    down_proj_only: bool = False,
 ) -> tuple[object, Dict[str, object]]:
     """
     Load model, apply either learned-direction or random-direction ablation.
@@ -289,8 +317,10 @@ def _apply_ablation_to_model(
         "results_dir": str(results_dir),
         "forget_roles": sorted(forget_roles),
         "ridge_lambda": ridge_lambda,
+        "span_projection_scale": float(span_projection_scale),
         "ablation_type": "random_matched_count" if random_baseline else "learned_forget_directions",
         "random_seed": int(random_seed) if random_baseline else None,
+        "down_proj_only": bool(down_proj_only),
         "layers": [],
     }
 
@@ -312,37 +342,60 @@ def _apply_ablation_to_model(
             else Z_learned
         )
 
-        down = base.layers[layer_idx].mlp.down_proj
-        w = down.weight.data  # (d_model, d_mlp)
-        dtype = w.dtype
-        dev = w.device
+        mlp = base.layers[layer_idx].mlp
+        w_down = mlp.down_proj.weight.data  # (d_model, d_mlp)
+        dtype = w_down.dtype
+        dev = w_down.device
 
         # Projector on CPU (float64): avoids CUDA on GPUs where PyTorch has no kernels (e.g. sm_61).
         z_cpu = Z.to(device="cpu", dtype=torch.float64)
-        p_perp_cpu = orthogonal_projector_complement(z_cpu, ridge_lambda=ridge_lambda)
+        p_perp_cpu = orthogonal_projector_complement(
+            z_cpu,
+            ridge_lambda=ridge_lambda,
+            span_projection_scale=span_projection_scale,
+        )
         p_perp = p_perp_cpu.to(device=dev, dtype=dtype)
 
-        # W_V^{new} = W_V @ P_perp
         with torch.no_grad():
-            w.copy_(torch.mm(w, p_perp))
+            # W_V^{new} = W_V @ P_perp  (remove forget subspace from down_proj *input*)
+            w_down.copy_(torch.mm(w_down, p_perp))
+            if not down_proj_only:
+                for name in ("gate_proj", "up_proj"):
+                    lin = getattr(mlp, name, None)
+                    if lin is None:
+                        continue
+                    w_in = lin.weight.data  # (d_mlp, d_model)
+                    if w_in.shape[0] != p_perp.shape[0]:
+                        raise ValueError(
+                            f"Layer {layer_idx}: {name}.weight.shape[0]={w_in.shape[0]} != "
+                            f"d_mlp={p_perp.shape[0]}; cannot apply P_perp @ W."
+                        )
+                    # y' = P_perp @ (W @ x + b)  =>  W' = P_perp @ W, b' = P_perp @ b
+                    w_in.copy_(torch.mm(p_perp, w_in))
+                    if lin.bias is not None:
+                        b = lin.bias.data
+                        lin.bias.data.copy_(torch.mv(p_perp, b))
 
         layer_meta = {
             "layer": layer_idx,
             "n_forget_columns": n_forget,
             "d_mlp": int(d_mlp),
+            "dual_sided": not down_proj_only,
         }
         if random_baseline:
             layer_meta["random_seed"] = int(random_seed) + int(layer_idx)
         meta["layers"].append(layer_meta)
+        side_msg = "W_down @ P_perp only" if down_proj_only else "P_perp @ W_gate/up + W_down @ P_perp"
         if random_baseline:
             print(
                 f"Layer {layer_idx}: removed span of {n_forget} RANDOM direction(s) "
-                f"(matched to forget count) via W_V @ P_perp."
+                f"(matched to forget count) with span_projection_scale={span_projection_scale} "
+                f"via {side_msg}."
             )
         else:
             print(
                 f"Layer {layer_idx}: removed span of {n_forget} forget SNMF column(s) "
-                f"via W_V @ P_perp."
+                f"with span_projection_scale={span_projection_scale} via {side_msg}."
             )
 
     if not meta["layers"]:
@@ -385,6 +438,8 @@ def main() -> None:
         device=ablation_device,
         random_baseline=False,
         random_seed=args.random_seed,
+        span_projection_scale=args.span_projection_scale,
+        down_proj_only=args.down_proj_only,
     )
 
     save_path = Path(args.save_path)
@@ -446,6 +501,8 @@ def main() -> None:
             device=ablation_device,
             random_baseline=True,
             random_seed=args.random_seed,
+            span_projection_scale=args.span_projection_scale,
+            down_proj_only=args.down_proj_only,
         )
         save_path_random = (
             Path(args.save_path_random)

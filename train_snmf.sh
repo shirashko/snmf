@@ -23,7 +23,9 @@ export TMPDIR="/home/morg/students/rashkovits/hf_cache"
 cd /home/morg/students/rashkovits/snmf
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 
-mkdir -p logs outputs/snmf_train_results $HF_HOME
+# Default output dir is separate from outputs/snmf_train_results so existing runs are not overwritten.
+OUTPUT_DIR="${OUTPUT_DIR:-outputs/snmf_train_results_pipeline}"
+mkdir -p logs "$OUTPUT_DIR" $HF_HOME
 
 # --- Parallelism Optimization ---
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
@@ -32,12 +34,13 @@ export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
 # --- Execute Training ---
 echo "--------------------------------------------------------"
 echo "Starting SNMF Training on Node: $SLURMD_NODENAME"
+echo "Output directory: $OUTPUT_DIR"
 echo "--------------------------------------------------------"
 
 python train_snmf.py \
     --model-path "local_models/gemma-2-0.3B_reference_model" \
     --data-path "data/data.json" \
-    --output-dir "outputs/snmf_train_results" \
+    --output-dir "$OUTPUT_DIR" \
     --layers "0-13" \
     --rank 100 \
     --mode "mlp_intermediate" \
