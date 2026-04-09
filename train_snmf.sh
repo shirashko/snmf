@@ -7,6 +7,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --partition=gpu-morgeva
 #SBATCH --account=gpu-research
+#SBATCH --constraint=h100
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=80G
@@ -34,15 +35,40 @@ RANK="${RANK:-300}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
 SNMF_MODE="${SNMF_MODE:-mlp_intermediate}"
 SNMF_INIT="${SNMF_INIT:-svd}"
-DEVICE="${DEVICE:-auto}"
+DEVICE="${DEVICE:-cuda}"
 SPARSITY="${SPARSITY:-0.01}"
 MAX_ITER="${MAX_ITER:-3000}"
 SEED="${SEED:-42}"
+REQUIRE_GPU="${REQUIRE_GPU:-1}"   # 1 => fail fast if CUDA GPU is not usable
 mkdir -p logs "$OUTPUT_DIR" $HF_HOME
 
 # --- Parallelism Optimization ---
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
+# --- GPU Preflight ---
+if [[ "$REQUIRE_GPU" == "1" ]]; then
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "[train_snmf.sh] REQUIRE_GPU=1 but nvidia-smi is unavailable."
+    exit 1
+  fi
+  if ! nvidia-smi -L >/dev/null 2>&1; then
+    echo "[train_snmf.sh] REQUIRE_GPU=1 but no visible NVIDIA GPU."
+    exit 1
+  fi
+  python3 - <<'PY'
+import sys
+import torch
+if not torch.cuda.is_available():
+    print("[train_snmf.sh] torch.cuda.is_available() is False.")
+    sys.exit(1)
+major, minor = torch.cuda.get_device_capability(0)
+if major < 7:
+    print(f"[train_snmf.sh] Unsupported CUDA capability sm_{major}{minor}; expected sm_70+.")
+    sys.exit(1)
+print(f"[train_snmf.sh] CUDA ready on {torch.cuda.get_device_name(0)} (sm_{major}{minor}).")
+PY
+fi
 
 # --- Execute Training ---
 echo "--------------------------------------------------------"
@@ -51,6 +77,11 @@ echo "Model path: $MODEL_PATH"
 echo "Data path: $DATA_PATH"
 echo "Output directory: $OUTPUT_DIR"
 echo "Layers: $LAYERS"
+echo "Device: $DEVICE"
+if command -v nvidia-smi >/dev/null 2>&1; then
+  echo "Visible GPUs:"
+  nvidia-smi -L || true
+fi
 echo "--------------------------------------------------------"
 
 python train_snmf.py \

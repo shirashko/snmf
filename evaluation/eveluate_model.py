@@ -4,6 +4,7 @@ from accelerate import Accelerator
 from evaluation.utils.validation_functions import (
     get_arithmetic_eval_fn,
     get_both_wmdp_eval_fn,
+    get_wmdp_bio_categorized_eval_fn,
     get_wmdp_bio_eval_fn,
     get_wmdp_cyber_eval_fn,
 )
@@ -40,6 +41,8 @@ def run_standalone_eval(
     eval_mode="arithmetic",
     large_eval=False,
     no_mmlu=False,
+    wmdp_include_path="",
+    wmdp_task_name="wmdp_bio_robust",
     device="cuda",
     batch_size=16,
     max_length=256,
@@ -93,6 +96,23 @@ def run_standalone_eval(
             accelerator=accelerator,
             large_eval=large_eval,
         )
+    elif eval_mode == "wmdp_bio_categorized":
+        if no_mmlu:
+            print("[eveluate_model.py] --no-mmlu is ignored for eval-mode=wmdp_bio_categorized.")
+        if not wmdp_include_path:
+            raise ValueError(
+                "eval_mode=wmdp_bio_categorized requires --wmdp-include-path "
+                "(directory containing task YAML files)."
+            )
+        include_path = wmdp_include_path
+        if include_path.endswith(".yaml") or include_path.endswith(".yml"):
+            include_path = os.path.dirname(include_path)
+        eval_factory = get_wmdp_bio_categorized_eval_fn(
+            accelerator=accelerator,
+            large_eval=large_eval,
+            include_path=include_path,
+            task_name=wmdp_task_name,
+        )
     else:
         raise ValueError(f"Unknown eval_mode: {eval_mode}")
     
@@ -108,7 +128,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--eval-mode",
         default="arithmetic",
-        choices=["arithmetic", "wmdp_bio", "wmdp_cyber", "both_wmdp"],
+        choices=["arithmetic", "wmdp_bio", "wmdp_cyber", "both_wmdp", "wmdp_bio_categorized"],
         help="Which evaluation pipeline to run.",
     )
     parser.add_argument(
@@ -126,6 +146,16 @@ if __name__ == "__main__":
     parser.add_argument("--max-length", type=int, default=256)
     parser.add_argument("--cache-dir", default="./cache")
     parser.add_argument("--dataset-cache-dir", default="./cache")
+    parser.add_argument(
+        "--wmdp-include-path",
+        default="",
+        help="Path to lm-eval task YAML directory (used with eval-mode=wmdp_bio_categorized).",
+    )
+    parser.add_argument(
+        "--wmdp-task-name",
+        default="wmdp_bio_robust",
+        help="Task/group name defined in the included YAMLs (e.g., wmdp_bio_robust, wmdp_bio_shortcut, wmdp_bio_categorized_mcqa).",
+    )
     parser.add_argument("--eng-valid-file", default="data/valid_eng.jsonl")
     parser.add_argument("--output-json", default=None, help="Optional path to write eval results as JSON.")
     args = parser.parse_args()
@@ -135,6 +165,8 @@ if __name__ == "__main__":
         eval_mode=args.eval_mode,
         large_eval=args.large_eval,
         no_mmlu=args.no_mmlu,
+        wmdp_include_path=args.wmdp_include_path,
+        wmdp_task_name=args.wmdp_task_name,
         device=args.device,
         batch_size=args.batch_size,
         max_length=args.max_length,

@@ -1,6 +1,7 @@
 import torch
 from lm_eval import evaluator
 from lm_eval.models.huggingface import HFLM
+from lm_eval.tasks import TaskManager
 from typing import List, Optional
 import math
 from datasets import load_dataset
@@ -233,6 +234,7 @@ def eval_model_lm_eval(
     task_list: List[str],
     limit: Optional[List[float]] = None,
     keep_all_subtasks: bool = False,
+    include_path: Optional[str] = None,
 ):
     custom_login()
     start_time = time.time()
@@ -270,6 +272,7 @@ def eval_model_lm_eval(
         print(f"[validation_functions.py] Setting {task} few shot to [{num_fewshot}]")
 
         # Run the evaluation
+        task_manager = TaskManager(include_path=include_path) if include_path else None
         with torch.inference_mode():
             results = evaluator.simple_evaluate(
                 model=eval_model,
@@ -280,6 +283,7 @@ def eval_model_lm_eval(
                 numpy_random_seed = seed,
                 torch_random_seed = seed,
                 fewshot_random_seed = seed,
+                task_manager=task_manager,
             )
         results = results["results"]
 
@@ -398,3 +402,22 @@ def get_both_wmdp_eval_fn(accelerator, large_eval):
     lim = [None, None, 0.40] if large_eval else [1000, 1000, .07]
     seed = 1234 if large_eval else None
     return lambda model, print_results: eval_model_lm_eval(model, print_results, seed=seed, accelerator=accelerator, task_list=["wmdp_bio", "wmdp_cyber", "mmlu"], limit=lim)
+
+
+def get_wmdp_bio_categorized_eval_fn(
+    accelerator,
+    large_eval: bool,
+    include_path: str,
+    task_name: str = "wmdp_bio_robust",
+):
+    lim = [None] if large_eval else [1000]
+    seed = 1234 if large_eval else None
+    return lambda model, print_results: eval_model_lm_eval(
+        model,
+        print_results,
+        seed=seed,
+        accelerator=accelerator,
+        task_list=[task_name],
+        limit=lim,
+        include_path=include_path,
+    )

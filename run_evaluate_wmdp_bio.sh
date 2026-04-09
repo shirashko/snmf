@@ -34,6 +34,7 @@ export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 
 # --- Config (override by exporting before sbatch/bash) ---
 MODEL_PATH="${MODEL_PATH:-/home/morg/students/rashkovits/Localized-UNDO/models/wmdp/gemma-2-2b}"
+EVAL_MODE="${EVAL_MODE:-wmdp_bio_categorized}"  # wmdp_bio | wmdp_bio_categorized
 DEVICE="${DEVICE:-cuda}"
 CACHE_DIR="${CACHE_DIR:-./cache}"
 DATASET_CACHE_DIR="${DATASET_CACHE_DIR:-./cache}"
@@ -41,11 +42,14 @@ DATASET_CACHE_DIR="${DATASET_CACHE_DIR:-./cache}"
 # Set LARGE_EVAL=0 for a quicker subset run.
 LARGE_EVAL="${LARGE_EVAL:-1}"   # 1 -> --large-eval (full WMDP-bio)
 NO_MMLU="${NO_MMLU:-1}"         # 1 -> --no-mmlu (WMDP-bio only)
+WMDP_INCLUDE_PATH="${WMDP_INCLUDE_PATH:-/home/morg/students/rashkovits/snmf/wmdp_bio_categorized_mcqa}"
+WMDP_TASK_NAME="${WMDP_TASK_NAME:-wmdp_bio_robust}"  # robust by default; or wmdp_bio_shortcut / wmdp_bio_categorized_mcqa
 RESULTS_JSON="${RESULTS_JSON:-outputs/eval_results/wmdp_bio_${SLURM_JOB_ID:-local}.json}"
 
 echo "--------------------------------------------------------"
 echo "Starting WMDP-bio evaluation on node: ${SLURMD_NODENAME:-local}"
 echo "Model path: $MODEL_PATH"
+echo "Eval mode:  $EVAL_MODE"
 echo "Large eval: $LARGE_EVAL"
 echo "No MMLU:    $NO_MMLU"
 echo "Results:    $RESULTS_JSON"
@@ -54,7 +58,7 @@ echo "--------------------------------------------------------"
 CMD=(
   python3 evaluation/eveluate_model.py
   --model-path "$MODEL_PATH"
-  --eval-mode wmdp_bio
+  --eval-mode "$EVAL_MODE"
   --device "$DEVICE"
   --cache-dir "$CACHE_DIR"
   --dataset-cache-dir "$DATASET_CACHE_DIR"
@@ -67,6 +71,11 @@ fi
 
 if [[ "$NO_MMLU" == "1" ]]; then
   CMD+=(--no-mmlu)
+fi
+
+if [[ "$EVAL_MODE" == "wmdp_bio_categorized" ]]; then
+  CMD+=(--wmdp-include-path "$WMDP_INCLUDE_PATH")
+  CMD+=(--wmdp-task-name "$WMDP_TASK_NAME")
 fi
 
 "${CMD[@]}"
