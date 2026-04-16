@@ -112,178 +112,6 @@ def orthogonal_projector_complement(
     return I_d - float(span_projection_scale) * p_span
 
 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Remove SNMF forget directions: W_down <- W_down @ P_perp; "
-        "W_up,W_gate <- P_perp @ W when present.",
-        epilog=(
-            "Typical use after scripts/wmdp/train_snmf.sh and scripts/arith/run_analyze_snmf_results.sh: same defaults "
-            "as those scripts (model + outputs/snmf_train_results)."
-        ),
-    )
-    p.add_argument(
-        "--model-path",
-        type=str,
-        default="local_models/gemma-2-0.3B_reference_model",
-        help="Same base model as train_snmf.py / analyze_snmf_results.py (default: scripts/wmdp/train_snmf.sh).",
-    )
-    p.add_argument(
-        "--results-dir",
-        type=str,
-        default="outputs/snmf_train_results",
-        help="SNMF output dir with layer_*/ (default: scripts/wmdp/train_snmf.sh --output-dir).",
-    )
-    p.add_argument(
-        "--save-path",
-        type=str,
-        default="local_models/gemma-2-0.3B_forget_ablated",
-        help="Directory for save_pretrained (default: sibling of reference model).",
-    )
-    p.add_argument(
-        "--save-path-random",
-        type=str,
-        default="",
-        help="Optional directory for random-direction ablated model. "
-        "Default: <save-path>_random_baseline.",
-    )
-    p.add_argument(
-        "--forget-roles",
-        type=str,
-        nargs="+",
-        default=["mult_forget", "div_forget", "forget_mixed"],
-    )
-    p.add_argument(
-        "--supervised-json-filename",
-        type=str,
-        default="feature_analysis_supervised.json",
-        help=(
-            "Per-layer supervised analysis JSON file name inside each layer_* folder "
-            "(e.g. feature_analysis_supervised_wmdp_bio.json)."
-        ),
-    )
-    p.add_argument(
-        "--ridge-lambda",
-        type=float,
-        default=1e-6,
-        help="Tikhonov on Z^T Z when building the span projector (stability).",
-    )
-    p.add_argument(
-        "--span-projection-scale",
-        type=float,
-        default=1.0,
-        help=(
-            "Coefficient s on P_span in P_perp = I - s·P_span. On vectors in the forget span, "
-            "this acts as scaling by (1-s): s=1 removes that component entirely (orthogonal "
-            "complement); s<1 leaves a residual (softer removal); s>1 over-subtracts—(1-s) is "
-            "negative, so the span component is flipped and scaled in magnitude (e.g. s=2 gives "
-            "the opposite direction with equal norm). Default 1.0."
-        ),
-    )
-    p.add_argument(
-        "--random-baseline",
-        action="store_true",
-        help="Also run matched-count random-direction ablation baseline.",
-    )
-    p.add_argument(
-        "--random-seed",
-        type=int,
-        default=1234,
-        help="Seed for reproducible random-direction baseline.",
-    )
-    p.add_argument(
-        "--device",
-        type=str,
-        default="auto",
-        help="Device for loading the model during weight edit (auto: cuda if usable, else cpu; "
-        "matches analyze_snmf_results / utils.resolve_device for old GPUs).",
-    )
-    p.add_argument(
-        "--metadata-out",
-        type=str,
-        default="",
-        help="Optional JSON path describing per-layer forget column counts.",
-    )
-    p.add_argument(
-        "--skip-eval",
-        action="store_true",
-        help="Do not run evaluation/eveluate_model.py before/after ablation.",
-    )
-    p.add_argument(
-        "--eval-device",
-        type=str,
-        default="auto",
-        help="Device for standalone eval (passed through to eveluate_model: auto|cuda|cpu).",
-    )
-    p.add_argument(
-        "--eval-mode",
-        type=str,
-        default="arithmetic",
-        choices=["arithmetic", "wmdp_bio", "wmdp_cyber", "both_wmdp", "wmdp_bio_categorized"],
-        help="Evaluation mode passed to run_standalone_eval / eveluate_model.py.",
-    )
-    p.add_argument(
-        "--eval-large",
-        action="store_true",
-        help="Use larger/full evaluation limits for WMDP/MMLU tasks.",
-    )
-    p.add_argument(
-        "--eval-no-mmlu",
-        action="store_true",
-        help="For single-domain WMDP eval modes, skip MMLU.",
-    )
-    p.add_argument(
-        "--eval-wmdp-include-path",
-        type=str,
-        default="",
-        help="Path to lm-eval task YAML directory (used with eval-mode=wmdp_bio_categorized).",
-    )
-    p.add_argument(
-        "--eval-wmdp-task-name",
-        type=str,
-        default="wmdp_bio_robust",
-        help="Task/group name for eval-mode=wmdp_bio_categorized.",
-    )
-    p.add_argument(
-        "--eval-batch-size",
-        type=int,
-        default=16,
-        help="Batch size for CE leg of arithmetic eval.",
-    )
-    p.add_argument(
-        "--eval-max-length",
-        type=int,
-        default=256,
-    )
-    p.add_argument(
-        "--eval-cache-dir",
-        type=str,
-        default="./cache",
-    )
-    p.add_argument(
-        "--eval-dataset-cache-dir",
-        type=str,
-        default="./cache",
-    )
-    p.add_argument(
-        "--eval-eng-valid-file",
-        type=str,
-        default="/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl",
-    )
-    p.add_argument(
-        "--eval-json-out",
-        type=str,
-        default="",
-        help="Write before/after metrics JSON here (default: <save-path>/ablation_eval_comparison.json).",
-    )
-    p.add_argument(
-        "--down-proj-only",
-        action="store_true",
-        help="Only ablate down_proj (W_V @ P_perp). Skip gate_proj/up_proj for ablations that "
-        "match the old single-sided behavior.",
-    )
-    return p.parse_args()
-
-
 def _summarize_eval(d: Dict[str, Any]) -> Dict[str, float]:
     """Keep scalar metrics for a compact table."""
     out: Dict[str, float] = {}
@@ -443,6 +271,177 @@ def _apply_ablation_to_model(
             f"No forget features found under {results_dir} for roles={sorted(forget_roles)}."
         )
     return local, meta
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Remove SNMF forget directions: W_down <- W_down @ P_perp; "
+        "W_up,W_gate <- P_perp @ W when present.",
+        epilog=(
+            "Typical use after running train_snmf.py and analyze_snmf_results.py, using the same relevant parameters. "
+        ),
+    )
+    p.add_argument(
+        "--model-path",
+        type=str,
+        required=True,
+        help="Same base model as train_snmf.py / analyze_snmf_results.py.",
+    )
+    p.add_argument(
+        "--results-dir",
+        type=str,
+        default="outputs/snmf_train_results",
+        help="SNMF output dir with layer_*/ (default: scripts/wmdp/train_snmf.sh --output-dir).",
+    )
+    p.add_argument(
+        "--save-path",
+        type=str,
+        default="local_models/gemma-2-0.3B_forget_ablated",
+        help="Directory for save_pretrained (default: sibling of reference model).",
+    )
+    p.add_argument(
+        "--save-path-random",
+        type=str,
+        default="",
+        help="Optional directory for random-direction ablated model. "
+        "Default: <save-path>_random_baseline.",
+    )
+    p.add_argument(
+        "--forget-roles",
+        type=str,
+        nargs="+",
+        default=["mult_forget", "div_forget", "forget_mixed"],
+    )
+    p.add_argument(
+        "--supervised-json-filename",
+        type=str,
+        default="feature_analysis_supervised.json",
+        help=(
+            "Per-layer supervised analysis JSON file name inside each layer_* folder "
+            "(e.g. feature_analysis_supervised_wmdp_bio.json)."
+        ),
+    )
+    p.add_argument(
+        "--ridge-lambda",
+        type=float,
+        default=1e-6,
+        help="Tikhonov on Z^T Z when building the span projector (stability).",
+    )
+    p.add_argument(
+        "--span-projection-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "Coefficient s on P_span in P_perp = I - s·P_span. On vectors in the forget span, "
+            "this acts as scaling by (1-s): s=1 removes that component entirely (orthogonal "
+            "complement); s<1 leaves a residual (softer removal); s>1 over-subtracts—(1-s) is "
+            "negative, so the span component is flipped and scaled in magnitude (e.g. s=2 gives "
+            "the opposite direction with equal norm). Default 1.0."
+        ),
+    )
+    p.add_argument(
+        "--random-baseline",
+        action="store_true",
+        help="Also run matched-count random-direction ablation baseline.",
+    )
+    p.add_argument(
+        "--random-seed",
+        type=int,
+        default=1234,
+        help="Seed for reproducible random-direction baseline.",
+    )
+    p.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        help="Device for loading the model during weight edit (auto: cuda if usable, else cpu; "
+        "matches analyze_snmf_results / utils.resolve_device for old GPUs).",
+    )
+    p.add_argument(
+        "--metadata-out",
+        type=str,
+        default="",
+        help="Optional JSON path describing per-layer forget column counts.",
+    )
+    p.add_argument(
+        "--skip-eval",
+        action="store_true",
+        help="Do not run evaluation/eveluate_model.py before/after ablation.",
+    )
+    p.add_argument(
+        "--eval-device",
+        type=str,
+        default="auto",
+        help="Device for standalone eval (passed through to eveluate_model: auto|cuda|cpu).",
+    )
+    p.add_argument(
+        "--eval-mode",
+        type=str,
+        default="arithmetic",
+        choices=["arithmetic", "wmdp_bio", "wmdp_cyber", "both_wmdp", "wmdp_bio_categorized"],
+        help="Evaluation mode passed to run_standalone_eval / eveluate_model.py.",
+    )
+    p.add_argument(
+        "--eval-large",
+        action="store_true",
+        help="Use larger/full evaluation limits for WMDP/MMLU tasks.",
+    )
+    p.add_argument(
+        "--eval-no-mmlu",
+        action="store_true",
+        help="For single-domain WMDP eval modes, skip MMLU.",
+    )
+    p.add_argument(
+        "--eval-wmdp-include-path",
+        type=str,
+        default="",
+        help="Path to lm-eval task YAML directory (used with eval-mode=wmdp_bio_categorized).",
+    )
+    p.add_argument(
+        "--eval-wmdp-task-name",
+        type=str,
+        default="wmdp_bio_robust",
+        help="Task/group name for eval-mode=wmdp_bio_categorized.",
+    )
+    p.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=16,
+        help="Batch size for CE leg of arithmetic eval.",
+    )
+    p.add_argument(
+        "--eval-max-length",
+        type=int,
+        default=256,
+    )
+    p.add_argument(
+        "--eval-cache-dir",
+        type=str,
+        default="./cache",
+    )
+    p.add_argument(
+        "--eval-dataset-cache-dir",
+        type=str,
+        default="./cache",
+    )
+    p.add_argument(
+        "--eval-eng-valid-file",
+        type=str,
+        default="/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl",
+    )
+    p.add_argument(
+        "--eval-json-out",
+        type=str,
+        default="",
+        help="Write before/after metrics JSON here (default: <save-path>/ablation_eval_comparison.json).",
+    )
+    p.add_argument(
+        "--down-proj-only",
+        action="store_true",
+        help="Only ablate down_proj (W_V @ P_perp). Skip gate_proj/up_proj for ablations that "
+        "match the old single-sided behavior.",
+    )
+    return p.parse_args()
 
 
 def main() -> None:
