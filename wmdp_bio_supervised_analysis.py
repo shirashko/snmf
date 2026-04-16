@@ -1,16 +1,17 @@
 """
 Supervised SNMF profiling for WMDP-bio style data (e.g. data/bio_data.json).
 
-Unlike arithmetic runs (mult_concept / div_concept / neutral), bio_data uses only
-``bio_forget`` (remove split) vs ``neutral`` (retain). Roles are binary:
-forget-lean vs retain-lean vs weak / low-signal.
+Unlike arithmetic runs (mult_concept / div_concept / neutral), bio_data uses
+``bio_forget`` (remove split) vs retain prompts labeled ``neutral`` and/or
+``bio_retain``. Both retain labels are pooled for forget-vs-retain profiling.
+Roles are binary: forget-lean vs retain-lean vs weak / low-signal.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,9 +30,20 @@ from utils import sorted_numeric_layer_dirs
 # Labels from data/bio_data.json (see data_utils/create_bio_data.py)
 BIO_FORGET_LABEL = "bio_forget"
 RETAIN_LABEL = "neutral"
+BIO_RETAIN_LABEL = "bio_retain"
 
 FORGET_LABELS = frozenset({BIO_FORGET_LABEL})
-RETAIN_LABELS = frozenset({RETAIN_LABEL})
+RETAIN_LABELS = frozenset({RETAIN_LABEL, BIO_RETAIN_LABEL})
+NEUTRAL_LABELS = frozenset({RETAIN_LABEL})
+BIO_RETAIN_LABELS = frozenset({BIO_RETAIN_LABEL})
+
+# Which comparison drives role_label (forget vs this retain side).
+RETAIN_BASIS_POOLED = "pooled"
+RETAIN_BASIS_NEUTRAL = "neutral"
+RETAIN_BASIS_BIO_RETAIN = "bio_retain"
+RETAIN_BASIS_CHOICES = frozenset(
+    {RETAIN_BASIS_POOLED, RETAIN_BASIS_NEUTRAL, RETAIN_BASIS_BIO_RETAIN}
+)
 
 
 def _assign_role_label_bio(
@@ -70,7 +82,8 @@ ROLE_LABEL_MEANINGS: Dict[str, str] = {
         "Negligible combined activation across forget and retain groups."
     ),
     "insufficient_groups": (
-        "Missing prompts in bio_forget or neutral; cannot form a two-way comparison."
+        "Missing prompts in bio_forget or in the chosen retain side (pooled / neutral / "
+        "bio_retain); cannot form a two-way comparison for role_label."
     ),
 }
 
@@ -83,8 +96,106 @@ ROLE_LABEL_ORDER: Tuple[str, ...] = (
 )
 
 
-def plot_layer_wmdp_bio_trends(results_dir: str) -> None:
+def _build_wmdp_bio_prompt_peak_matrices(
+    feature_acts: torch.Tensor,
+    labels: List[str],
+    sample_ids: List[int],
+    forget_labels: frozenset = FORGET_LABELS,
+    retain_labels: frozenset = RETAIN_LABELS,
+) -> Tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    List[int],
+    int,
+    int,
+    int,
+    int,
+]:
+    """
+    Per-prompt max/min SNMF activation per latent (same geometry as unary supervised profiling).
+
+    Returns
+    -------
+    feature_acts_np, prompt_max_vals, prompt_max_indices, prompt_min_vals, prompt_min_indices,
+    is_forget, is_neutral, is_bio_retain, is_pooled, sample_ids_list,
+    n_forget, n_neutral, n_bio_retain, n_pooled
+    """
+    _, n_latents = feature_acts.shape
+    sample_ids_arr = np.asarray(sample_ids)
+    labels_arr = np.asarray(labels)
+    spans = _sample_id_to_spans(sample_ids_arr)
+    feature_acts_np = feature_acts.detach().cpu().numpy().astype(np.float64, copy=False)
+
+    sample_ids_list = list(spans.keys())
+    n_prompts = len(sample_ids_list)
+
+    sample_labels_arr = labels_arr[np.asarray(sample_ids_list, dtype=np.int64)]
+    supervised_mask = np.isin(sample_labels_arr, list(forget_labels | retain_labels))
+    sample_labels_sup = sample_labels_arr.copy()
+    sample_labels_sup[~supervised_mask] = ""
+
+    is_forget = np.isin(sample_labels_sup, list(forget_labels))
+    is_neutral = np.isin(sample_labels_sup, list(NEUTRAL_LABELS))
+    is_bio_retain = np.isin(sample_labels_sup, list(BIO_RETAIN_LABELS))
+    is_pooled = is_neutral | is_bio_retain
+
+    n_forget = int(np.sum(is_forget))
+    n_neutral = int(np.sum(is_neutral))
+    n_bio_retain = int(np.sum(is_bio_retain))
+    n_pooled = int(np.sum(is_pooled))
+
+    prompt_max_vals = np.empty((n_prompts, n_latents), dtype=np.float64)
+    prompt_max_indices = np.empty((n_prompts, n_latents), dtype=np.int64)
+    prompt_min_vals = np.empty((n_prompts, n_latents), dtype=np.float64)
+    prompt_min_indices = np.empty((n_prompts, n_latents), dtype=np.int64)
+    ar = np.arange(n_latents, dtype=np.int64)
+    for i, sid in enumerate(sample_ids_list):
+        samp_start, samp_end = spans[sid]
+        seg = feature_acts_np[samp_start:samp_end, :]
+        local_argmax = np.argmax(seg, axis=0)
+        prompt_max_indices[i, :] = samp_start + local_argmax
+        prompt_max_vals[i, :] = seg[local_argmax, ar]
+        local_argmin = np.argmin(seg, axis=0)
+        prompt_min_indices[i, :] = samp_start + local_argmin
+        prompt_min_vals[i, :] = seg[local_argmin, ar]
+
+    return (
+        feature_acts_np,
+        prompt_max_vals,
+        prompt_max_indices,
+        prompt_min_vals,
+        prompt_min_indices,
+        is_forget,
+        is_neutral,
+        is_bio_retain,
+        is_pooled,
+        sample_ids_list,
+        n_forget,
+        n_neutral,
+        n_bio_retain,
+        n_pooled,
+    )
+
+
+def plot_layer_wmdp_bio_trends(
+    results_dir: str, retain_basis: str = RETAIN_BASIS_POOLED
+) -> None:
     """Aggregate supervised JSON and plot forget-vs-retain log-ratio by layer."""
+    if retain_basis not in RETAIN_BASIS_CHOICES:
+        raise ValueError(f"retain_basis must be one of {sorted(RETAIN_BASIS_CHOICES)}")
+    y_keys = {
+        RETAIN_BASIS_POOLED: ("log_forget_vs_pooled_retain", "log_forget_vs_retain"),
+        RETAIN_BASIS_NEUTRAL: ("log_forget_vs_neutral",),
+        RETAIN_BASIS_BIO_RETAIN: ("log_forget_vs_bio_retain",),
+    }[retain_basis]
+
     results_path = Path(results_dir)
     all_data: List[Dict[str, Any]] = []
 
@@ -97,12 +208,19 @@ def plot_layer_wmdp_bio_trends(results_dir: str) -> None:
 
         for latent_idx, profile in layer_results.items():
             lr = profile.get("log_ratios", {})
+            y_val = None
+            for k in y_keys:
+                if lr.get(k) is not None:
+                    y_val = lr.get(k)
+                    break
+            if y_val is None:
+                y_val = np.nan
             all_data.append(
                 {
                     "layer": layer_idx,
                     "latent_idx": int(latent_idx),
                     "role": profile.get("role_label", "unknown"),
-                    "log_forget_vs_retain": lr.get("log_forget_vs_retain", np.nan),
+                    "log_ratio_plot": float(y_val) if y_val is not None else np.nan,
                     "mean_act": profile.get("activation_stats", {}).get("mean", np.nan),
                 }
             )
@@ -117,7 +235,7 @@ def plot_layer_wmdp_bio_trends(results_dir: str) -> None:
     sns.lineplot(
         data=df,
         x="layer",
-        y="log_forget_vs_retain",
+        y="log_ratio_plot",
         hue="role",
         ax=ax,
         marker="o",
@@ -126,13 +244,13 @@ def plot_layer_wmdp_bio_trends(results_dir: str) -> None:
         legend="brief",
     )
     ax.set_title(
-        "log(mean forget / mean retain) by layer and role_label (WMDP-bio)",
+        f"log(mean forget / mean retain) by layer (basis={retain_basis})",
         fontsize=14,
     )
     ax.set_ylabel("log ratio")
     ax.axhline(0, ls="--", color="black", alpha=0.4)
     plt.tight_layout()
-    plot_path = results_path / "layer_wmdp_bio_trends.png"
+    plot_path = results_path / f"layer_wmdp_bio_trends_{retain_basis}.png"
     fig.savefig(plot_path, dpi=150, bbox_inches="tight")
     print(f"Saved WMDP-bio trend plot to {plot_path}")
     plt.close(fig)
@@ -142,7 +260,7 @@ def plot_layer_wmdp_bio_trends(results_dir: str) -> None:
         df.groupby("role")
         .agg(
             {
-                "log_forget_vs_retain": ["mean", "std"],
+                "log_ratio_plot": ["mean", "std"],
                 "mean_act": ["mean", "std"],
                 "latent_idx": "count",
             }
@@ -163,22 +281,52 @@ def analyze_features_supervised_wmdp_bio(
     forget_labels: frozenset = FORGET_LABELS,
     retain_labels: frozenset = RETAIN_LABELS,
     role_assignment_threshold: float = 0.15,
+    retain_basis: str = RETAIN_BASIS_POOLED,
 ) -> Dict[int, Dict[str, Any]]:
     """
-    Per-latent prompt-mean peak activations for bio_forget vs neutral only.
+    Per-latent prompt-mean peak activations for bio_forget vs retain splits.
 
-    Primary log-ratio: log(mean_forget / mean_retain). Same peak-token aggregation as
-    the arithmetic pipeline; class-count bias removed via per-group means.
+    Computes log(mean_forget / mean_*) for:
+      - pooled retain (neutral ∪ bio_retain),
+      - neutral-only,
+      - bio_retain-only,
+    plus log(mean_bio_retain / mean_neutral) when both retain buckets exist.
+
+    ``retain_basis`` selects which forget-vs-retain comparison sets ``role_label``.
     """
-    print("Profiling latents (WMDP-bio supervised: bio_forget vs neutral)...")
+    if retain_basis not in RETAIN_BASIS_CHOICES:
+        raise ValueError(
+            f"retain_basis must be one of {sorted(RETAIN_BASIS_CHOICES)}, got {retain_basis!r}"
+        )
+    print(
+        f"Profiling latents (WMDP-bio supervised: bio_forget vs retain; "
+        f"role_basis={retain_basis})..."
+    )
 
-    n_tokens, n_latents = feature_acts.shape
+    _, n_latents = feature_acts.shape
     sample_ids_arr = np.asarray(sample_ids)
     all_token_ids = np.asarray(token_ids, dtype=np.int64)
-    labels_arr = np.asarray(labels)
     spans = _sample_id_to_spans(sample_ids_arr)
 
-    feature_acts_np = feature_acts.detach().cpu().numpy().astype(np.float64, copy=False)
+    (
+        feature_acts_np,
+        prompt_max_vals,
+        prompt_max_indices,
+        prompt_min_vals,
+        prompt_min_indices,
+        is_forget,
+        is_neutral,
+        is_bio_retain,
+        is_pooled,
+        sample_ids_list,
+        n_forget,
+        n_neutral,
+        n_bio_retain,
+        n_pooled,
+    ) = _build_wmdp_bio_prompt_peak_matrices(
+        feature_acts, labels, sample_ids, forget_labels, retain_labels
+    )
+
     frob_sq = float(np.sum(feature_acts_np**2)) + _LOG_RATIO_EPS
 
     try:
@@ -187,75 +335,101 @@ def analyze_features_supervised_wmdp_bio(
     except np.linalg.LinAlgError:
         svd_row0 = np.full(n_latents, np.nan, dtype=np.float64)
 
-    sample_ids_list = list(spans.keys())
     n_prompts = len(sample_ids_list)
-
-    sample_labels_arr = labels_arr[np.asarray(sample_ids_list, dtype=np.int64)]
-    supervised_mask = np.isin(sample_labels_arr, list(forget_labels | retain_labels))
-    sample_labels_sup = sample_labels_arr.copy()
-    sample_labels_sup[~supervised_mask] = ""
-
-    is_retain = np.isin(sample_labels_sup, list(retain_labels))
-    is_forget = np.isin(sample_labels_sup, list(forget_labels))
-    n_retain = int(np.sum(is_retain))
-    n_forget = int(np.sum(is_forget))
-
-    prompt_max_vals = np.empty((n_prompts, n_latents), dtype=np.float64)
-    prompt_max_indices = np.empty((n_prompts, n_latents), dtype=np.int64)
-    prompt_min_vals = np.empty((n_prompts, n_latents), dtype=np.float64)
-    prompt_min_indices = np.empty((n_prompts, n_latents), dtype=np.int64)
-
-    ar = np.arange(n_latents, dtype=np.int64)
-    for i, sid in enumerate(sample_ids_list):
-        samp_start, samp_end = spans[sid]
-        seg = feature_acts_np[samp_start:samp_end, :]
-
-        local_argmax = np.argmax(seg, axis=0)
-        prompt_max_indices[i, :] = samp_start + local_argmax
-        prompt_max_vals[i, :] = seg[local_argmax, ar]
-
-        local_argmin = np.argmin(seg, axis=0)
-        prompt_min_indices[i, :] = samp_start + local_argmin
-        prompt_min_vals[i, :] = seg[local_argmin, ar]
 
     feature_profiles: Dict[int, Dict[str, Any]] = {}
 
     for latent_idx in range(n_latents):
         col = feature_acts_np[:, latent_idx]
         col_max = prompt_max_vals[:, latent_idx]
-        sum_retain = float(np.sum(col_max[is_retain]))
+
         sum_forget = float(np.sum(col_max[is_forget]))
-        mean_retain = sum_retain / n_retain if n_retain > 0 else 0.0
+        sum_neutral = float(np.sum(col_max[is_neutral]))
+        sum_bio_retain = float(np.sum(col_max[is_bio_retain]))
+        sum_pooled = sum_neutral + sum_bio_retain
+
         mean_forget = sum_forget / n_forget if n_forget > 0 else 0.0
+        mean_neutral = sum_neutral / n_neutral if n_neutral > 0 else 0.0
+        mean_bio_retain = sum_bio_retain / n_bio_retain if n_bio_retain > 0 else 0.0
+        mean_pooled = sum_pooled / n_pooled if n_pooled > 0 else 0.0
 
-        log_forget_vs_retain = _log_ratio(mean_forget, mean_retain)
-
-        role_label = _assign_role_label_bio(
-            log_forget_vs_retain,
-            mean_forget,
-            mean_retain,
-            n_forget,
-            n_retain,
-            role_assignment_threshold,
+        log_forget_vs_pooled: Optional[float] = (
+            _log_ratio(mean_forget, mean_pooled) if n_pooled > 0 and n_forget > 0 else None
         )
+        log_forget_vs_neutral: Optional[float] = (
+            _log_ratio(mean_forget, mean_neutral) if n_neutral > 0 and n_forget > 0 else None
+        )
+        log_forget_vs_bio_retain: Optional[float] = (
+            _log_ratio(mean_forget, mean_bio_retain) if n_bio_retain > 0 and n_forget > 0 else None
+        )
+        log_bio_retain_vs_neutral: Optional[float] = (
+            _log_ratio(mean_bio_retain, mean_neutral)
+            if n_neutral > 0 and n_bio_retain > 0
+            else None
+        )
+
+        if retain_basis == RETAIN_BASIS_POOLED:
+            n_r, mean_r, log_fr = n_pooled, mean_pooled, log_forget_vs_pooled
+        elif retain_basis == RETAIN_BASIS_NEUTRAL:
+            n_r, mean_r, log_fr = n_neutral, mean_neutral, log_forget_vs_neutral
+        else:
+            n_r, mean_r, log_fr = n_bio_retain, mean_bio_retain, log_forget_vs_bio_retain
+
+        if log_fr is None or n_forget == 0 or n_r == 0:
+            role_label = "insufficient_groups"
+        else:
+            role_label = _assign_role_label_bio(
+                log_fr,
+                mean_forget,
+                mean_r,
+                n_forget,
+                n_r,
+                role_assignment_threshold,
+            )
 
         col_sq = float(np.sum(col**2))
         profile: Dict[str, Any] = {
             "role_label": role_label,
+            "retain_basis_used": retain_basis,
             "group_sums": {
-                "neutral": round(sum_retain, 6),
                 "bio_forget": round(sum_forget, 6),
+                "neutral": round(sum_neutral, 6),
+                "bio_retain": round(sum_bio_retain, 6),
+                "pooled_retain": round(sum_pooled, 6),
             },
             "group_counts": {
-                "neutral": n_retain,
                 "bio_forget": n_forget,
+                "neutral": n_neutral,
+                "bio_retain": n_bio_retain,
+                "pooled_retain": n_pooled,
             },
             "group_means": {
-                "neutral": round(mean_retain, 6),
                 "bio_forget": round(mean_forget, 6),
+                "neutral": round(mean_neutral, 6),
+                "bio_retain": round(mean_bio_retain, 6),
+                "pooled_retain": round(mean_pooled, 6),
             },
             "log_ratios": {
-                "log_forget_vs_retain": round(log_forget_vs_retain, 6),
+                # Backward compatible: same as pooled forget vs (neutral ∪ bio_retain).
+                "log_forget_vs_retain": (
+                    round(log_forget_vs_pooled, 6) if log_forget_vs_pooled is not None else None
+                ),
+                "log_forget_vs_pooled_retain": (
+                    round(log_forget_vs_pooled, 6) if log_forget_vs_pooled is not None else None
+                ),
+                "log_forget_vs_neutral": (
+                    round(log_forget_vs_neutral, 6) if log_forget_vs_neutral is not None else None
+                ),
+                "log_forget_vs_bio_retain": (
+                    round(log_forget_vs_bio_retain, 6)
+                    if log_forget_vs_bio_retain is not None
+                    else None
+                ),
+                "log_bio_retain_vs_neutral": (
+                    round(log_bio_retain_vs_neutral, 6)
+                    if log_bio_retain_vs_neutral is not None
+                    else None
+                ),
             },
             "activation_stats": {
                 "mean": round(float(np.mean(col_max)), 6),
@@ -308,15 +482,28 @@ def analyze_features_supervised_wmdp_bio(
     for idx, p in feature_profiles.items():
         role_map.setdefault(p["role_label"], []).append(idx)
 
-    print("\nLatent summary by role_label (WMDP-bio; top 5 per role by log_forget_vs_retain):")
+    _sort_key = {
+        RETAIN_BASIS_POOLED: "log_forget_vs_pooled_retain",
+        RETAIN_BASIS_NEUTRAL: "log_forget_vs_neutral",
+        RETAIN_BASIS_BIO_RETAIN: "log_forget_vs_bio_retain",
+    }[retain_basis]
+
+    print(f"\nLatent summary by role_label (WMDP-bio; top 5 per role by {_sort_key}):")
     for role in sorted(role_map.keys()):
         indices = role_map[role]
         indices.sort(
-            key=lambda x: feature_profiles[x]["log_ratios"]["log_forget_vs_retain"],
+            key=lambda x: (
+                feature_profiles[x]["log_ratios"].get(_sort_key)
+                if feature_profiles[x]["log_ratios"].get(_sort_key) is not None
+                else float("-inf")
+            ),
             reverse=True,
         )
+        def _fmt_lr(v: Optional[float]) -> str:
+            return f"{v:.2f}" if v is not None else "n/a"
+
         top_str = ", ".join(
-            f"{i}(log_fr:{feature_profiles[i]['log_ratios']['log_forget_vs_retain']:.2f})"
+            f"{i}(log:{_fmt_lr(feature_profiles[i]['log_ratios'].get(_sort_key))})"
             for i in indices[:5]
         )
         print(f"  {role:22} | n={len(indices):4} | {top_str}")

@@ -1,6 +1,6 @@
 """
 Analyze SNMF checkpoints trained on WMDP-bio supervision (e.g. data/bio_data.json:
-bio_forget vs neutral). Uses binary forget-vs-retain profiling instead of mult/div/neutral.
+bio_forget vs retain buckets). Unary per-latent log-ratios.
 """
 
 import argparse
@@ -13,6 +13,8 @@ import torch
 from model_utils import load_local_model
 from utils import resolve_device, set_seed, sorted_numeric_layer_dirs
 from wmdp_bio_supervised_analysis import (
+    RETAIN_BASIS_CHOICES,
+    RETAIN_BASIS_POOLED,
     ROLE_LABEL_MEANINGS,
     ROLE_LABEL_ORDER,
     analyze_features_supervised_wmdp_bio,
@@ -21,10 +23,12 @@ from wmdp_bio_supervised_analysis import (
 from unsupervised_analysis import analyze_features_unsupervised
 
 ANALYSIS_OVERVIEW = (
-    "Each SNMF column is one latent. WMDP-bio supervised profiling compares mean peak "
-    "activation per prompt for bio_forget vs neutral (retain) only, then assigns a "
-    "role_label when log(mean_forget/mean_retain) exceeds the threshold. "
-    "Counts are how many latents received each label, per layer and in total."
+    "Each SNMF column is one latent. Unary supervised JSON stores per-latent log-ratios: "
+    "bio_forget vs pooled retain (neutral ∪ bio_retain), vs neutral-only, vs bio_retain-only, "
+    "and log(mean_bio_retain/mean_neutral) when both retain buckets exist. "
+    "role_label uses one chosen basis (--supervised-retain-basis: pooled | neutral | bio_retain) "
+    "with the same threshold on log(mean_forget/mean_retain_side). "
+    "Counts are how many latents received each unary role label, per layer and in total."
 )
 
 
@@ -42,7 +46,17 @@ def main() -> None:
         type=float,
         default=0.15,
         metavar="LOG_RATIO",
-        help="Minimum |log(mean_forget/mean_retain)| margin for bio_forget_lean / retain_lean.",
+        help="Minimum |log(mean_forget/mean_retain_side)| margin for bio_forget_lean / retain_lean.",
+    )
+    parser.add_argument(
+        "--supervised-retain-basis",
+        type=str,
+        default=RETAIN_BASIS_POOLED,
+        choices=sorted(RETAIN_BASIS_CHOICES),
+        help=(
+            "Which retain pool sets role_label: pooled (neutral+bio_retain), neutral only, "
+            "or bio_retain only. All three forget-vs-side log-ratios are still written per latent."
+        ),
     )
     parser.add_argument("--skip-vocab", action="store_true")
     parser.add_argument("--device", type=str, default="auto")
@@ -99,6 +113,7 @@ def main() -> None:
             token_ids,
             local_model.tokenizer,
             role_assignment_threshold=args.role_assignment_threshold,
+            retain_basis=args.supervised_retain_basis,
             context_top_n=args.activation_context_top_n,
             context_window=args.activation_context_window,
         )
@@ -111,13 +126,12 @@ def main() -> None:
             supervised_results[k].get("role_label", "unknown") for k in supervised_results
         )
         global_role_counts.update(layer_roles)
-        per_layer_stats.append(
-            {
-                "layer": layer_num,
-                "features_explored": n_features,
-                "counts_by_role": dict(layer_roles),
-            }
-        )
+        layer_entry: dict = {
+            "layer": layer_num,
+            "features_explored": n_features,
+            "counts_by_role": dict(layer_roles),
+        }
+        per_layer_stats.append(layer_entry)
         print(
             f"  Layer {layer_num}: {n_features} latents | roles: "
             + ", ".join(f"{r}={c}" for r, c in sorted(layer_roles.items()))
@@ -135,11 +149,12 @@ def main() -> None:
             with open(out_unsup, "w", encoding="utf-8") as f:
                 json.dump(unsupervised_results, f, indent=2, ensure_ascii=False)
 
-    print("\nGenerating WMDP-bio trend plots...")
-    try:
-        plot_layer_wmdp_bio_trends(str(results_dir))
-    except Exception as e:
-        print(f"Could not generate plots: {e}")
+    print("\nGenerating WMDP-bio trend plots (one PNG per retain basis)...")
+    for basis in sorted(RETAIN_BASIS_CHOICES):
+        try:
+            plot_layer_wmdp_bio_trends(str(results_dir), retain_basis=basis)
+        except Exception as e:
+            print(f"Could not generate plot for basis={basis}: {e}")
 
     total_features = sum(s["features_explored"] for s in per_layer_stats)
     summary_path = results_dir / args.summary_filename
@@ -151,6 +166,13 @@ def main() -> None:
     summary_doc = {
         "overview": ANALYSIS_OVERVIEW,
         "pipeline": "wmdp_bio",
+        "supervised_retain_basis": args.supervised_retain_basis,
+        "retain_basis_note": (
+            f"role_label used log(mean_forget/mean_retain) with retain side "
+            f"{args.supervised_retain_basis!r}. Per-latent JSON also includes "
+            "log_forget_vs_pooled_retain, log_forget_vs_neutral, log_forget_vs_bio_retain, "
+            "and log_bio_retain_vs_neutral when counts allow."
+        ),
         "role_assignment_threshold": args.role_assignment_threshold,
         "threshold_note": (
             "Minimum natural-log ratio margin for bio_forget_lean vs retain_lean vs weak_mixed; "

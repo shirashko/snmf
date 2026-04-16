@@ -80,6 +80,25 @@ def run_snmf(
     logging.info(f"Running SNMF: Rank={rank}, Sparsity={sparsity}, Init={init}")
     logging.info(f"  Input Matrix Shape: {activations.shape}")
 
+    finite_mask = torch.isfinite(activations)
+    if not torch.all(finite_mask):
+        num_bad = int((~finite_mask).sum().item())
+        num_total = activations.numel()
+        finite_vals = activations[finite_mask]
+        replacement_scale = float(finite_vals.abs().max().item()) if finite_vals.numel() > 0 else 1.0
+        replacement_scale = max(replacement_scale, 1.0)
+        logging.warning(
+            "  Activations contain %d/%d non-finite values (NaN/Inf); replacing before SNMF.",
+            num_bad,
+            num_total,
+        )
+        activations = torch.nan_to_num(
+            activations,
+            nan=0.0,
+            posinf=replacement_scale,
+            neginf=-replacement_scale,
+        )
+
     if normalize:
         logging.info("  Applying L2 normalization to activations.")
         norms = activations.norm(dim=1, keepdim=True).clamp_min(1e-8)
@@ -87,6 +106,15 @@ def run_snmf(
 
     # Matrix A is (d_features, n_samples)
     activation_matrix = activations.T.to(device)
+    logging.info(
+        "  SNMF matrix stats: shape=%s dtype=%s device=%s min=%.6e max=%.6e absmax=%.6e",
+        tuple(activation_matrix.shape),
+        activation_matrix.dtype,
+        activation_matrix.device,
+        float(activation_matrix.min().item()),
+        float(activation_matrix.max().item()),
+        float(activation_matrix.abs().max().item()),
+    )
 
     nmf = NMFSemiNMF(rank, fitting_device=device, sparsity=sparsity)
     nmf.fit(activation_matrix, max_iter=max_iter, patience=patience, verbose=True, init=init)

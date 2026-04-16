@@ -19,8 +19,44 @@ def init_svd(A: torch.Tensor, K: int, eps: float = 1e-6):
 
     A is (d_features, n_samples).
     """
+    if not torch.isfinite(A).all():
+        bad = int((~torch.isfinite(A)).sum().item())
+        total = A.numel()
+        raise ValueError(
+            f"init_svd received non-finite matrix entries: {bad}/{total}. "
+            "Sanitize activations before calling SNMF."
+        )
+
+    A_min = float(A.min().item())
+    A_max = float(A.max().item())
+    A_absmax = float(A.abs().max().item())
+    logger.info(
+        "init_svd input stats: shape=%s dtype=%s device=%s min=%.6e max=%.6e absmax=%.6e rank=%d",
+        tuple(A.shape),
+        A.dtype,
+        A.device,
+        A_min,
+        A_max,
+        A_absmax,
+        K,
+    )
+
     # 1) truncated SVD -----------------------------------------------------------
-    U, S, Vh = torch.linalg.svd(A, full_matrices=False)
+    try:
+        U, S, Vh = torch.linalg.svd(A, full_matrices=False)
+    except RuntimeError as err:
+        err_msg = str(err)
+        if A.is_cuda and "cusolver" in err_msg.lower():
+            logger.warning(
+                "CUDA SVD failed with cuSOLVER error. Retrying init_svd on CPU for debugging and stability."
+            )
+            A_cpu = A.float().cpu()
+            U_cpu, S_cpu, Vh_cpu = torch.linalg.svd(A_cpu, full_matrices=False)
+            U = U_cpu.to(A.device, dtype=A.dtype)
+            S = S_cpu.to(A.device, dtype=A.dtype)
+            Vh = Vh_cpu.to(A.device, dtype=A.dtype)
+        else:
+            raise
     U   = U[:, :K]                       # (d, K)
     S   = S[:K]                          # (K,)
     Vh  = Vh[:K, :]                      # (K, n)
