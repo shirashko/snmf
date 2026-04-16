@@ -417,12 +417,6 @@ def parse_args() -> argparse.Namespace:
         default=256,
     )
     p.add_argument(
-        "--eval-json-out",
-        type=str,
-        default="",
-        help="Write before/after metrics JSON here (default: <save-path>/ablation_eval_comparison.json).",
-    )
-    p.add_argument(
         "--down-proj-only",
         action="store_true",
         help="Only ablate down_proj (W_V @ P_perp). Skip gate_proj/up_proj for ablations that "
@@ -513,11 +507,7 @@ def main() -> None:
         assert results_before is not None
         _print_eval_comparison(results_before, results_after)
 
-        eval_out = (
-            Path(args.eval_json_out)
-            if args.eval_json_out
-            else save_path / "ablation_eval_comparison.json"
-        )
+        eval_out = save_path / "ablation_eval_comparison.json"
         eval_out.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "baseline_model_path": args.model_path,
