@@ -46,8 +46,8 @@ from model_utils import load_local_model
 from utils import resolve_device, sorted_numeric_layer_dirs
 
 
-def _load_role_map(layer_dir: Path) -> Dict[int, str]:
-    path = layer_dir / "feature_analysis_supervised.json"
+def _load_role_map(layer_dir: Path, supervised_json_filename: str) -> Dict[int, str]:
+    path = layer_dir / supervised_json_filename
     if not path.exists():
         raise FileNotFoundError(
             f"Missing {path}. Run analyze_snmf_results.py on --results-dir first "
@@ -61,6 +61,7 @@ def _load_role_map(layer_dir: Path) -> Dict[int, str]:
 def _forget_feature_matrix(
     layer_dir: Path,
     forget_roles: Set[str],
+    supervised_json_filename: str,
 ) -> torch.Tensor | None:
     """Returns Z of shape (d_mlp, k) with columns z_i from F, or None if nothing to remove."""
     ckpt_path = layer_dir / "snmf_factors.pt"
@@ -78,7 +79,7 @@ def _forget_feature_matrix(
     if F.ndim != 2:
         raise ValueError(f"Unexpected F shape in {ckpt_path}: {tuple(F.shape)}")
 
-    roles = _load_role_map(layer_dir)
+    roles = _load_role_map(layer_dir, supervised_json_filename)
     k_all = F.shape[1]
     forget_cols = sorted(i for i, r in roles.items() if r in forget_roles and 0 <= i < k_all)
     if not forget_cols:
@@ -152,6 +153,15 @@ def parse_args() -> argparse.Namespace:
         default=["mult_forget", "div_forget", "forget_mixed"],
     )
     p.add_argument(
+        "--supervised-json-filename",
+        type=str,
+        default="feature_analysis_supervised.json",
+        help=(
+            "Per-layer supervised analysis JSON file name inside each layer_* folder "
+            "(e.g. feature_analysis_supervised_wmdp_bio.json)."
+        ),
+    )
+    p.add_argument(
         "--ridge-lambda",
         type=float,
         default=1e-6,
@@ -203,6 +213,35 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="auto",
         help="Device for standalone eval (passed through to eveluate_model: auto|cuda|cpu).",
+    )
+    p.add_argument(
+        "--eval-mode",
+        type=str,
+        default="arithmetic",
+        choices=["arithmetic", "wmdp_bio", "wmdp_cyber", "both_wmdp", "wmdp_bio_categorized"],
+        help="Evaluation mode passed to run_standalone_eval / eveluate_model.py.",
+    )
+    p.add_argument(
+        "--eval-large",
+        action="store_true",
+        help="Use larger/full evaluation limits for WMDP/MMLU tasks.",
+    )
+    p.add_argument(
+        "--eval-no-mmlu",
+        action="store_true",
+        help="For single-domain WMDP eval modes, skip MMLU.",
+    )
+    p.add_argument(
+        "--eval-wmdp-include-path",
+        type=str,
+        default="",
+        help="Path to lm-eval task YAML directory (used with eval-mode=wmdp_bio_categorized).",
+    )
+    p.add_argument(
+        "--eval-wmdp-task-name",
+        type=str,
+        default="wmdp_bio_robust",
+        help="Task/group name for eval-mode=wmdp_bio_categorized.",
     )
     p.add_argument(
         "--eval-batch-size",
@@ -295,6 +334,7 @@ def _apply_ablation_to_model(
     model_path: str,
     results_dir: Path,
     forget_roles: Set[str],
+    supervised_json_filename: str,
     ridge_lambda: float,
     device: str,
     random_baseline: bool,
@@ -316,6 +356,7 @@ def _apply_ablation_to_model(
         "model_path": model_path,
         "results_dir": str(results_dir),
         "forget_roles": sorted(forget_roles),
+        "supervised_json_filename": supervised_json_filename,
         "ridge_lambda": ridge_lambda,
         "span_projection_scale": float(span_projection_scale),
         "ablation_type": "random_matched_count" if random_baseline else "learned_forget_directions",
@@ -325,7 +366,7 @@ def _apply_ablation_to_model(
     }
 
     for _layer_num, layer_dir in sorted_numeric_layer_dirs(results_dir):
-        Z_learned = _forget_feature_matrix(layer_dir, forget_roles)
+        Z_learned = _forget_feature_matrix(layer_dir, forget_roles, supervised_json_filename)
         if Z_learned is None:
             continue
 
@@ -417,6 +458,11 @@ def main() -> None:
         print("\n=== Baseline eval (original model, before ablation) ===")
         results_before = run_standalone_eval(
             args.model_path,
+            eval_mode=args.eval_mode,
+            large_eval=args.eval_large,
+            no_mmlu=args.eval_no_mmlu,
+            wmdp_include_path=args.eval_wmdp_include_path,
+            wmdp_task_name=args.eval_wmdp_task_name,
             device=args.eval_device,
             batch_size=args.eval_batch_size,
             max_length=args.eval_max_length,
@@ -434,6 +480,7 @@ def main() -> None:
         model_path=args.model_path,
         results_dir=results_dir,
         forget_roles=forget_roles,
+        supervised_json_filename=args.supervised_json_filename,
         ridge_lambda=args.ridge_lambda,
         device=ablation_device,
         random_baseline=False,
@@ -465,6 +512,11 @@ def main() -> None:
         print("\n=== Post-ablation eval (saved checkpoint) ===")
         results_after = run_standalone_eval(
             str(save_path),
+            eval_mode=args.eval_mode,
+            large_eval=args.eval_large,
+            no_mmlu=args.eval_no_mmlu,
+            wmdp_include_path=args.eval_wmdp_include_path,
+            wmdp_task_name=args.eval_wmdp_task_name,
             device=args.eval_device,
             batch_size=args.eval_batch_size,
             max_length=args.eval_max_length,
@@ -497,6 +549,7 @@ def main() -> None:
             model_path=args.model_path,
             results_dir=results_dir,
             forget_roles=forget_roles,
+            supervised_json_filename=args.supervised_json_filename,
             ridge_lambda=args.ridge_lambda,
             device=ablation_device,
             random_baseline=True,
@@ -523,6 +576,11 @@ def main() -> None:
             print("\n=== Post-random-baseline eval (saved checkpoint) ===")
             results_random = run_standalone_eval(
                 str(save_path_random),
+                eval_mode=args.eval_mode,
+                large_eval=args.eval_large,
+                no_mmlu=args.eval_no_mmlu,
+                wmdp_include_path=args.eval_wmdp_include_path,
+                wmdp_task_name=args.eval_wmdp_task_name,
                 device=args.eval_device,
                 batch_size=args.eval_batch_size,
                 max_length=args.eval_max_length,
