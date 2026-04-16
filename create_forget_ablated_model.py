@@ -49,6 +49,31 @@ EVAL_ENG_VALID_FILE = "/home/morg/students/rashkovits/Localized-UNDO/datasets/pr
 EVAL_MAX_LENGTH = 256
 CACHE_DIR = "./cache"
 
+
+def _gc_and_empty_cuda() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _run_standalone_eval_for_args(model_path: str, args: argparse.Namespace) -> Dict[str, Any]:
+    """Single place for kwargs passed to evaluation/eveluate_model.run_standalone_eval."""
+    return run_standalone_eval(
+        model_path,
+        eval_mode=args.eval_mode,
+        large_eval=args.eval_large,
+        no_mmlu=args.eval_no_mmlu,
+        wmdp_include_path=args.eval_wmdp_include_path,
+        wmdp_task_name=args.wmdp_task_name,
+        device=args.eval_device,
+        batch_size=args.eval_batch_size,
+        max_length=EVAL_MAX_LENGTH,
+        cache_dir=CACHE_DIR,
+        dataset_cache_dir=CACHE_DIR,
+        eng_valid_file=EVAL_ENG_VALID_FILE,
+    )
+
+
 def _load_role_map(layer_dir: Path, supervised_json_filename: str) -> Dict[int, str]:
     path = layer_dir / supervised_json_filename
     if not path.exists():
@@ -425,23 +450,8 @@ def main() -> None:
 
     if not args.skip_eval:
         print("\n=== Baseline eval (original model, before ablation) ===")
-        results_before = run_standalone_eval(
-            args.model_path,
-            eval_mode=args.eval_mode,
-            large_eval=args.eval_large,
-            no_mmlu=args.eval_no_mmlu,
-            wmdp_include_path=args.eval_wmdp_include_path,
-            wmdp_task_name=args.eval_wmdp_task_name,
-            device=args.eval_device,
-            batch_size=args.eval_batch_size,
-            max_length=EVAL_MAX_LENGTH,
-            CACHE_DIR= CACHE_DIR,
-            dataset_CACHE_DIR= CACHE_DIR,
-            eng_valid_file=EVAL_ENG_VALID_FILE,
-        )
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        results_before = _run_standalone_eval_for_args(args.model_path, args)
+        _gc_and_empty_cuda()
 
     ablation_device = resolve_device(args.device)
     print(f"Ablation model load device (after resolve): {ablation_device}")
@@ -472,26 +482,11 @@ def main() -> None:
 
     # Drop ablation model from memory before loading again for eval.
     del local
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    _gc_and_empty_cuda()
 
     if not args.skip_eval:
         print("\n=== Post-ablation eval (saved checkpoint) ===")
-        results_after = run_standalone_eval(
-            str(save_path),
-            eval_mode=args.eval_mode,
-            large_eval=args.eval_large,
-            no_mmlu=args.eval_no_mmlu,
-            wmdp_include_path=args.eval_wmdp_include_path,
-            wmdp_task_name=args.eval_wmdp_task_name,
-            device=args.eval_device,
-            batch_size=args.eval_batch_size,
-            max_length=EVAL_MAX_LENGTH,
-            CACHE_DIR= CACHE_DIR,
-            dataset_CACHE_DIR= CACHE_DIR,
-            eng_valid_file=EVAL_ENG_VALID_FILE,
-        )
+        results_after = _run_standalone_eval_for_args(str(save_path), args)
         assert results_before is not None
         _print_eval_comparison(results_before, results_after)
 
@@ -532,26 +527,11 @@ def main() -> None:
         print(f"Saved random-baseline model and tokenizer to {save_path_random}")
 
         del local_rand
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        _gc_and_empty_cuda()
 
         if not args.skip_eval:
             print("\n=== Post-random-baseline eval (saved checkpoint) ===")
-            results_random = run_standalone_eval(
-                str(save_path_random),
-                eval_mode=args.eval_mode,
-                large_eval=args.eval_large,
-                no_mmlu=args.eval_no_mmlu,
-                wmdp_include_path=args.eval_wmdp_include_path,
-                wmdp_task_name=args.eval_wmdp_task_name,
-                device=args.eval_device,
-                batch_size=args.eval_batch_size,
-                max_length=EVAL_MAX_LENGTH,
-                CACHE_DIR= CACHE_DIR,
-                dataset_CACHE_DIR= CACHE_DIR,
-                eng_valid_file=EVAL_ENG_VALID_FILE,
-            )
+            results_random = _run_standalone_eval_for_args(str(save_path_random), args)
             assert results_before is not None and results_after is not None
             print("\n--- Learned-direction ablation vs random baseline ---")
             _print_eval_comparison(results_after, results_random)
