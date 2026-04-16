@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- Slurm Configuration ---
-#SBATCH --job-name=snmf_forget_pass2
+#SBATCH --job-name=snmf_forget_wmdp_bio
 #SBATCH --output=logs/snmf_forget_pipe_%j.out
 #SBATCH --error=logs/snmf_forget_pipe_%j.err
 #SBATCH --time=24:00:00
@@ -12,14 +12,14 @@
 
 # End-to-end: SNMF training -> supervised analysis -> forget ablation checkpoint (+ optional eval).
 #
-# Defaults: load gemma-2-0.3B_forget_ablated_pipeline_from_ablated (second-stage ablated model) and
-# write SNMF + ablation artifacts under *_pass2 paths so prior runs (pipeline / _from_ablated) stay intact.
+# Defaults: WMDP-bio profile for Gemma-2-2B, writing/reading
+# outputs/snmf_train_results_wmdp_bio_gemma2_2b.
 # Override anything via env before sbatch, e.g.:
 #   SNMF_OUTPUT_DIR=outputs/my_run ABLATION_OUTPUT_DIR=outputs/my_run_ablate_meta sbatch run_snmf_forget_pipeline.sh
 #
 # Skip steps (reuse existing artifacts):
 #   SKIP_TRAIN=1    — skip train_snmf.py (expects layer_* under SNMF_OUTPUT_DIR)
-#   SKIP_ANALYZE=1  — skip analyze_snmf_results.py (expects feature_analysis_supervised.json per layer)
+#   SKIP_ANALYZE=1  — skip wmdp_bio_analyze_snmf_results.py
 
 set -euo pipefail
 
@@ -41,17 +41,17 @@ mkdir -p logs "$HF_HOME"
 
 # ========== Shared I/O ==========
 # Where train_snmf writes and analyze + forget ablation read SNMF artifacts.
-# Default *_pass2 avoids clobbering outputs/snmf_train_results_pipeline_from_ablated from the previous round.
-SNMF_OUTPUT_DIR="${SNMF_OUTPUT_DIR:-outputs/snmf_train_results_pipeline_from_ablated_pass2}"
+# Default points to your WMDP-bio SNMF run.
+SNMF_OUTPUT_DIR="${SNMF_OUTPUT_DIR:-outputs/snmf_train_results_wmdp_bio_gemma2_2b}"
 # Forget-ablation metadata + eval JSON (separate from SNMF layer_* tree).
-ABLATION_OUTPUT_DIR="${ABLATION_OUTPUT_DIR:-outputs/forget_ablation_pipeline_from_ablated_pass2}"
+ABLATION_OUTPUT_DIR="${ABLATION_OUTPUT_DIR:-outputs/forget_ablation_wmdp_bio_gemma2_2b}"
 
-# Base model: prior round’s learned ablation checkpoint (do not overwrite this directory when saving).
-MODEL_PATH="${MODEL_PATH:-local_models/gemma-2-0.3B_forget_ablated_pipeline_from_ablated}"
-DATA_PATH="${DATA_PATH:-data/data.json}"
+# Base model used by WMDP-bio SNMF run.
+MODEL_PATH="${MODEL_PATH:-/home/morg/students/rashkovits/Localized-UNDO/models/wmdp/gemma-2-2b}"
+DATA_PATH="${DATA_PATH:-data/bio_data.json}"
 
 # --- train_snmf.py (see train_snmf.sh) ---
-LAYERS="${LAYERS:-0-13}"
+LAYERS="${LAYERS:-0-25}"
 RANK="${RANK:-300}"
 SNMF_MODE="${SNMF_MODE:-mlp_intermediate}"
 SNMF_INIT="${SNMF_INIT:-svd}"
@@ -61,15 +61,17 @@ SPARSITY="${SPARSITY:-0.01}"
 MAX_ITER="${MAX_ITER:-5000}"
 TRAIN_SEED="${TRAIN_SEED:-42}"
 
-# --- analyze_snmf_results.py (see run_analyze_snmf_results.sh) ---
-SUMMARY_FILE="${SUMMARY_FILE:-analysis_summary.json}"
+# --- wmdp_bio_analyze_snmf_results.py ---
+SUMMARY_FILE="${SUMMARY_FILE:-analysis_summary_wmdp_bio.json}"
 ANALYZE_DEVICE="${ANALYZE_DEVICE:-auto}"
 ANALYZE_SEED="${ANALYZE_SEED:-42}"
 
 # --- create_forget_ablated_model (see run_create_forget_ablated_model.sh) ---
-# New checkpoint dir so MODEL_PATH (from_ablated) is never overwritten by save_pretrained.
-SAVE_PATH="${SAVE_PATH:-local_models/gemma-2-0.3B_forget_ablated_pipeline_from_ablated_pass2}"
+# New checkpoint dir so MODEL_PATH is never overwritten by save_pretrained.
+SAVE_PATH="${SAVE_PATH:-local_models/gemma-2-2b_wmdp_bio_forget_ablated}"
 SAVE_PATH_RANDOM="${SAVE_PATH_RANDOM:-${SAVE_PATH}_random_baseline}"
+# Per-layer supervised role JSON expected by create_forget_ablated_model.py.
+SUPERVISED_JSON_FILENAME="${SUPERVISED_JSON_FILENAME:-feature_analysis_supervised_wmdp_bio.json}"
 mkdir -p "$ABLATION_OUTPUT_DIR"
 METADATA_OUT="${METADATA_OUT:-${ABLATION_OUTPUT_DIR}/forget_ablation_metadata.json}"
 EVAL_JSON_OUT="${EVAL_JSON_OUT:-${ABLATION_OUTPUT_DIR}/ablation_eval_comparison.json}"
@@ -77,6 +79,11 @@ RIDGE_LAMBDA="${RIDGE_LAMBDA:-1e-6}"
 RANDOM_SEED="${RANDOM_SEED:-1234}"
 ABLATION_DEVICE="${ABLATION_DEVICE:-auto}"
 EVAL_DEVICE="${EVAL_DEVICE:-auto}"
+EVAL_MODE="${EVAL_MODE:-wmdp_bio}"
+EVAL_LARGE="${EVAL_LARGE:-0}"
+EVAL_NO_MMLU="${EVAL_NO_MMLU:-0}"
+EVAL_WMDP_INCLUDE_PATH="${EVAL_WMDP_INCLUDE_PATH:-}"
+EVAL_WMDP_TASK_NAME="${EVAL_WMDP_TASK_NAME:-wmdp_bio_robust}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
 EVAL_MAX_LENGTH="${EVAL_MAX_LENGTH:-256}"
 EVAL_CACHE_DIR="${EVAL_CACHE_DIR:-./cache}"
@@ -85,7 +92,7 @@ EVAL_ENG_VALID_FILE="${EVAL_ENG_VALID_FILE:-data/valid_eng.jsonl}"
 SKIP_EVAL="${SKIP_EVAL:-0}"
 RANDOM_BASELINE="${RANDOM_BASELINE:-1}"
 DOWN_PROJ_ONLY="${DOWN_PROJ_ONLY:-0}"
-FORGET_ROLES="${FORGET_ROLES:-mult_forget div_forget forget_mixed mult_lean div_lean}"
+FORGET_ROLES="${FORGET_ROLES:-bio_forget_lean}"
 
 SKIP_TRAIN="${SKIP_TRAIN:-0}"
 SKIP_ANALYZE="${SKIP_ANALYZE:-0}"
@@ -102,6 +109,8 @@ echo " SNMF output (train + read): $SNMF_OUTPUT_DIR"
 echo " Ablation run artifacts:      $ABLATION_OUTPUT_DIR"
 echo " Learned ablation save:        $SAVE_PATH"
 echo " Random baseline save:         $SAVE_PATH_RANDOM  (if RANDOM_BASELINE=1)"
+echo " Supervised JSON filename:     $SUPERVISED_JSON_FILENAME"
+echo " Eval mode:                    $EVAL_MODE"
 echo " SKIP_TRAIN=$SKIP_TRAIN  SKIP_ANALYZE=$SKIP_ANALYZE"
 echo "================================================================"
 
@@ -130,14 +139,15 @@ fi
 
 # ========== 2) Analyze (supervised roles) ==========
 if [[ "$SKIP_ANALYZE" == "1" ]]; then
-  echo "[2/3] SKIP_ANALYZE=1 — skipping analyze_snmf_results.py"
+  echo "[2/3] SKIP_ANALYZE=1 — skipping wmdp_bio_analyze_snmf_results.py"
 else
   echo "[2/3] Analyzing SNMF results in $SNMF_OUTPUT_DIR"
-  python analyze_snmf_results.py \
+  python wmdp_bio_analyze_snmf_results.py \
     --model-path "$MODEL_PATH" \
     --results-dir "$SNMF_OUTPUT_DIR" \
     --summary-filename "$SUMMARY_FILE" \
-    --role-assignment-threshold 0.05 \
+    --role-assignment-threshold 0.15 \
+    --supervised-retain-basis pooled \
     --device "$ANALYZE_DEVICE" \
     --seed "$ANALYZE_SEED" \
     --top-k-unsupervised 30 \
@@ -153,6 +163,18 @@ EVAL_ARGS=()
 if [[ "$SKIP_EVAL" == "1" ]]; then
   EVAL_ARGS+=(--skip-eval)
 fi
+if [[ "$EVAL_LARGE" == "1" ]]; then
+  EVAL_ARGS+=(--eval-large)
+fi
+if [[ "$EVAL_NO_MMLU" == "1" ]]; then
+  EVAL_ARGS+=(--eval-no-mmlu)
+fi
+if [[ -n "$EVAL_WMDP_INCLUDE_PATH" ]]; then
+  EVAL_ARGS+=(--eval-wmdp-include-path "$EVAL_WMDP_INCLUDE_PATH")
+fi
+if [[ -n "$EVAL_WMDP_TASK_NAME" ]]; then
+  EVAL_ARGS+=(--eval-wmdp-task-name "$EVAL_WMDP_TASK_NAME")
+fi
 RANDOM_ARGS=()
 if [[ "$RANDOM_BASELINE" == "1" ]]; then
   RANDOM_ARGS+=(--random-baseline)
@@ -167,6 +189,7 @@ fi
 python create_forget_ablated_model.py \
   --model-path "$MODEL_PATH" \
   --results-dir "$SNMF_OUTPUT_DIR" \
+  --supervised-json-filename "$SUPERVISED_JSON_FILENAME" \
   --save-path "$SAVE_PATH" \
   --forget-roles $FORGET_ROLES \
   --ridge-lambda "$RIDGE_LAMBDA" \
@@ -174,6 +197,7 @@ python create_forget_ablated_model.py \
   --metadata-out "$METADATA_OUT" \
   --eval-json-out "$EVAL_JSON_OUT" \
   --eval-device "$EVAL_DEVICE" \
+  --eval-mode "$EVAL_MODE" \
   --eval-batch-size "$EVAL_BATCH_SIZE" \
   --eval-max-length "$EVAL_MAX_LENGTH" \
   --eval-cache-dir "$EVAL_CACHE_DIR" \
