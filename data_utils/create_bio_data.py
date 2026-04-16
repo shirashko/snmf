@@ -85,8 +85,8 @@ def load_texts(jsonl_path: Path) -> List[str]:
     return texts
 
 
-def load_qa_questions_and_answers(jsonl_path: Path) -> Tuple[List[str], List[str]]:
-    questions: List[str] = []
+def load_qa_texts_and_answers(jsonl_path: Path) -> Tuple[List[str], List[str]]:
+    question_answer_texts: List[str] = []
     answers: List[str] = []
     with jsonl_path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -100,11 +100,13 @@ def load_qa_questions_and_answers(jsonl_path: Path) -> Tuple[List[str], List[str
 
             question = qa.get("question")
             answer = qa.get("answer")
-            if isinstance(question, str) and question.strip():
-                questions.append(question.strip())
-            if isinstance(answer, str) and answer.strip():
-                answers.append(answer.strip())
-    return questions, answers
+            question_text = question.strip() if isinstance(question, str) else ""
+            answer_text = answer.strip() if isinstance(answer, str) else ""
+            if question_text and answer_text:
+                question_answer_texts.append(f"{question_text} {answer_text}")
+            if answer_text:
+                answers.append(answer_text)
+    return question_answer_texts, answers
 
 
 def sample_texts(texts: List[str], k: int, rng: random.Random, source_name: str) -> List[str]:
@@ -115,20 +117,24 @@ def sample_texts(texts: List[str], k: int, rng: random.Random, source_name: str)
     return rng.sample(texts, k)
 
 
-def sample_half_questions_half_answers(
-    questions: List[str], answers: List[str], k: int, rng: random.Random, source_name: str
+def sample_half_question_and_answer_half_answer_only(
+    question_answer_texts: List[str],
+    answers: List[str],
+    k: int,
+    rng: random.Random,
+    source_name: str,
 ) -> List[str]:
-    question_k = k // 2
-    answer_k = k - question_k
-    if len(questions) < question_k:
+    qa_k = k // 2
+    answer_only_k = k - qa_k
+    if len(question_answer_texts) < qa_k:
         raise ValueError(
-            f"{source_name} has only {len(questions)} questions, but {question_k} are required."
+            f"{source_name} has only {len(question_answer_texts)} question+answer rows, but {qa_k} are required."
         )
-    if len(answers) < answer_k:
+    if len(answers) < answer_only_k:
         raise ValueError(
-            f"{source_name} has only {len(answers)} answers, but {answer_k} are required."
+            f"{source_name} has only {len(answers)} answers, but {answer_only_k} are required."
         )
-    sampled = rng.sample(questions, question_k) + rng.sample(answers, answer_k)
+    sampled = rng.sample(question_answer_texts, qa_k) + rng.sample(answers, answer_only_k)
     rng.shuffle(sampled)
     return sampled
 
@@ -153,9 +159,11 @@ def main() -> None:
     output_data: Dict[str, List[str]] = {}
     for label, source_path in label_to_source.items():
         if label in {"bio_forget", "bio_retain"}:
-            questions, answers = load_qa_questions_and_answers(source_path)
-            sampled_texts = sample_half_questions_half_answers(
-                questions,
+            question_answer_texts, answers = load_qa_texts_and_answers(
+                source_path
+            )
+            sampled_texts = sample_half_question_and_answer_half_answer_only(
+                question_answer_texts,
                 answers,
                 args.samples_per_label,
                 rng,
