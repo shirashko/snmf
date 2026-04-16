@@ -46,7 +46,7 @@ from llm_utils.model_utils import load_local_model
 from llm_utils.utils import resolve_device, sorted_numeric_layer_dirs
 
 EVAL_ENG_VALID_FILE = "/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl"
-
+EVAL_MAX_LENGTH = 256
 
 def _load_role_map(layer_dir: Path, supervised_json_filename: str) -> Dict[int, str]:
     path = layer_dir / supervised_json_filename
@@ -406,11 +406,6 @@ def parse_args() -> argparse.Namespace:
         help="Batch size for CE leg of arithmetic eval.",
     )
     p.add_argument(
-        "--eval-max-length",
-        type=int,
-        default=256,
-    )
-    p.add_argument(
         "--down-proj-only",
         action="store_true",
         help="Only ablate down_proj (W_V @ P_perp). Skip gate_proj/up_proj for ablations that "
@@ -439,7 +434,7 @@ def main() -> None:
             wmdp_task_name=args.eval_wmdp_task_name,
             device=args.eval_device,
             batch_size=args.eval_batch_size,
-            max_length=args.eval_max_length,
+            max_length=EVAL_MAX_LENGTH,
             cache_dir= cache_dir,
             dataset_cache_dir=cache_dir,
             eng_valid_file=EVAL_ENG_VALID_FILE,
@@ -492,7 +487,7 @@ def main() -> None:
             wmdp_task_name=args.eval_wmdp_task_name,
             device=args.eval_device,
             batch_size=args.eval_batch_size,
-            max_length=args.eval_max_length,
+            max_length=EVAL_MAX_LENGTH,
             cache_dir= cache_dir,
             dataset_cache_dir= cache_dir,
             eng_valid_file=EVAL_ENG_VALID_FILE,
@@ -552,7 +547,7 @@ def main() -> None:
                 wmdp_task_name=args.eval_wmdp_task_name,
                 device=args.eval_device,
                 batch_size=args.eval_batch_size,
-                max_length=args.eval_max_length,
+                max_length=EVAL_MAX_LENGTH,
                 cache_dir= cache_dir,
                 dataset_cache_dir= cache_dir,
                 eng_valid_file=EVAL_ENG_VALID_FILE,
