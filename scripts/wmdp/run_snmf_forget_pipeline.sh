@@ -15,7 +15,7 @@
 # Defaults: WMDP-bio profile for Gemma-2-2B, writing/reading
 # outputs/snmf_train_results_wmdp_bio_gemma2_2b.
 # Override anything via env before sbatch, e.g.:
-#   SNMF_OUTPUT_DIR=outputs/my_run ABLATION_OUTPUT_DIR=outputs/my_run_ablate_meta sbatch run_snmf_forget_pipeline.sh
+#   SNMF_OUTPUT_DIR=outputs/my_run ABLATION_OUTPUT_DIR=outputs/my_run_ablate_meta sbatch scripts/wmdp/run_snmf_forget_pipeline.sh
 #
 # Skip steps (reuse existing artifacts):
 #   SKIP_TRAIN=1    — skip train_snmf.py (expects layer_* under SNMF_OUTPUT_DIR)
@@ -50,7 +50,7 @@ ABLATION_OUTPUT_DIR="${ABLATION_OUTPUT_DIR:-outputs/forget_ablation_wmdp_bio_gem
 MODEL_PATH="${MODEL_PATH:-/home/morg/students/rashkovits/Localized-UNDO/models/wmdp/gemma-2-2b}"
 DATA_PATH="${DATA_PATH:-data/bio_data.json}"
 
-# --- train_snmf.py (see train_snmf.sh) ---
+# --- train_snmf.py (see scripts/wmdp/train_snmf.sh) ---
 LAYERS="${LAYERS:-0-25}"
 RANK="${RANK:-300}"
 SNMF_MODE="${SNMF_MODE:-mlp_intermediate}"

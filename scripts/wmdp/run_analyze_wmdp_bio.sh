@@ -12,9 +12,9 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=80G
 
-# WMDP-bio pipeline: analyze SNMF factors trained with data/bio_data.json (see train_snmf.sh).
+# WMDP-bio pipeline: analyze SNMF factors trained with data/bio_data.json (see scripts/wmdp/train_snmf.sh).
 # Labels: bio_forget, bio_retain, neutral (see wmdp_bio_supervised_analysis.py); checkpoint stores them.
-#   train_snmf.sh  ->  RESULTS_DIR/layer_*/snmf_factors.pt
+#   scripts/wmdp/train_snmf.sh  ->  RESULTS_DIR/layer_*/snmf_factors.pt
 #   this script    ->  wmdp_bio_analyze_snmf_results.py -> *_wmdp_bio.json + SUMMARY_FILE
 
 set -euo pipefail
@@ -35,7 +35,7 @@ export PYTHONPATH="${PYTHONPATH:-}:$(pwd)"
 
 mkdir -p logs "$HF_HOME"
 
-# --- Analysis I/O (match train_snmf.sh defaults for WMDP-bio + Gemma-2-2b) ---
+# --- Analysis I/O (match scripts/wmdp/train_snmf.sh defaults for WMDP-bio + Gemma-2-2b) ---
 MODEL_PATH="${MODEL_PATH:-/home/morg/students/rashkovits/Localized-UNDO/models/wmdp/gemma-2-2b}"
 DATA_PATH="${DATA_PATH:-data/bio_data.json}"
 RESULTS_DIR="${RESULTS_DIR:-outputs/snmf_train_results_wmdp_bio_gemma2_2b}"

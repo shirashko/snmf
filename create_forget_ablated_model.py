@@ -3,10 +3,10 @@ Build a new HF checkpoint whose MLP removes SNMF forget directions (dual-sided w
 
 Expected pipeline (matches the repo shell scripts):
 
-  1. ``train_snmf.sh`` → writes ``outputs/snmf_train_results/layer_*/snmf_factors.pt``
+  1. ``scripts/wmdp/train_snmf.sh`` → writes ``outputs/snmf_train_results/layer_*/snmf_factors.pt``
      with ``mode=mlp_intermediate`` (required: ``F`` lives in the same space as
      ``mlp.down_proj`` input).
-  2. ``run_analyze_snmf_results.sh`` → writes ``layer_*/feature_analysis_supervised.json``
+  2. ``scripts/arith/run_analyze_snmf_results.sh`` → writes ``layer_*/feature_analysis_supervised.json``
      (``role_label`` per latent, from ``analyze_snmf_results.py``).
   3. This script → reads ``F`` + ``role_label``, applies projections on MLP weights, saves a new model.
 
@@ -51,7 +51,7 @@ def _load_role_map(layer_dir: Path, supervised_json_filename: str) -> Dict[int, 
     if not path.exists():
         raise FileNotFoundError(
             f"Missing {path}. Run analyze_snmf_results.py on --results-dir first "
-            f"(e.g. run_analyze_snmf_results.sh) so each layer has role_label entries."
+            f"(e.g. scripts/arith/run_analyze_snmf_results.sh) so each layer has role_label entries."
         )
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
@@ -73,7 +73,7 @@ def _forget_feature_matrix(
         raise ValueError(
             f"{ckpt_path}: checkpoint mode is {mode!r}, but this script only applies to "
             f"mlp_intermediate (F must match down_proj input). Re-train with train_snmf.py "
-            f"--mode mlp_intermediate (see train_snmf.sh)."
+            f"--mode mlp_intermediate (see scripts/wmdp/train_snmf.sh)."
         )
     F = ckpt["F"].float().cpu()
     if F.ndim != 2:
@@ -117,7 +117,7 @@ def parse_args() -> argparse.Namespace:
         description="Remove SNMF forget directions: W_down <- W_down @ P_perp; "
         "W_up,W_gate <- P_perp @ W when present.",
         epilog=(
-            "Typical use after train_snmf.sh and run_analyze_snmf_results.sh: same defaults "
+            "Typical use after scripts/wmdp/train_snmf.sh and scripts/arith/run_analyze_snmf_results.sh: same defaults "
             "as those scripts (model + outputs/snmf_train_results)."
         ),
     )
@@ -125,13 +125,13 @@ def parse_args() -> argparse.Namespace:
         "--model-path",
         type=str,
         default="local_models/gemma-2-0.3B_reference_model",
-        help="Same base model as train_snmf.py / analyze_snmf_results.py (default: train_snmf.sh).",
+        help="Same base model as train_snmf.py / analyze_snmf_results.py (default: scripts/wmdp/train_snmf.sh).",
     )
     p.add_argument(
         "--results-dir",
         type=str,
         default="outputs/snmf_train_results",
-        help="SNMF output dir with layer_*/ (default: train_snmf.sh --output-dir).",
+        help="SNMF output dir with layer_*/ (default: scripts/wmdp/train_snmf.sh --output-dir).",
     )
     p.add_argument(
         "--save-path",
