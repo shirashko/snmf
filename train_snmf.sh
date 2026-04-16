@@ -27,7 +27,7 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 
 # Defaults target the WMDP-bio Gemma-2-2b setup.
 MODEL_PATH="${MODEL_PATH:-/home/morg/students/rashkovits/Localized-UNDO/models/wmdp/gemma-2-2b}"
-DATA_PATH="${DATA_PATH:-data/bio_data_new.json}"
+DATA_PATH="${DATA_PATH:-data/bio_data_02.json}"
 # Keep outputs separate from earlier arithmetic/0.3B runs.
 OUTPUT_DIR="${OUTPUT_DIR:-outputs/snmf_train_results_wmdp_bio_gemma2_2b_02}"
 LAYERS="${LAYERS:-0-25}"        # Gemma-2-2b has 26 layers => indices 0..25
