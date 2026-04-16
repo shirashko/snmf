@@ -4,7 +4,7 @@ import torch
 from pathlib import Path
 
 from utils import resolve_device, set_seed, sorted_numeric_layer_dirs
-from model_utils import load_local_model
+from llm_utils.model_utils import load_local_model
 from collections import Counter
 
 from supervised_analysis import (

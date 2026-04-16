@@ -42,7 +42,7 @@ from typing import Any, Dict, Set
 import torch
 
 from evaluation.eveluate_model import run_standalone_eval
-from model_utils import load_local_model
+from llm_utils.model_utils import load_local_model
 from utils import resolve_device, sorted_numeric_layer_dirs
 
 

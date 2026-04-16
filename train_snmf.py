@@ -10,7 +10,7 @@ from typing import Dict, Tuple
 import torch
 from dotenv import load_dotenv
 
-from model_utils import load_local_model
+from llm_utils.model_utils import load_local_model
 from llm_utils.local_activation_generator import LocalActivationGenerator
 from data_utils.concept_dataset import SupervisedConceptDataset
 from factorization.seminmf import NMFSemiNMF

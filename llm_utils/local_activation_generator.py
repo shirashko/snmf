@@ -3,7 +3,7 @@ from tqdm import tqdm
 from typing import List, Tuple, Dict
 from contextlib import contextmanager
 import sys
-from model_utils import LocalModel
+from llm_utils.model_utils import LocalModel
 
 
 class LocalActivationGenerator:

@@ -2,7 +2,7 @@ import torch
 from typing import Dict, Any
 
 from experiments.snmf_interp.generate_vocab_proj import get_vocab_proj_gemma_hf, get_vocab_proj_residual_hf
-from model_utils import LocalModel
+from llm_utils.model_utils import LocalModel
 
 
 
