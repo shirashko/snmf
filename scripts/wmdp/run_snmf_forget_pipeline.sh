@@ -73,8 +73,6 @@ SAVE_PATH_RANDOM="${SAVE_PATH_RANDOM:-${SAVE_PATH}_random_baseline}"
 # Per-layer supervised role JSON expected by create_forget_ablated_model.py.
 SUPERVISED_JSON_FILENAME="${SUPERVISED_JSON_FILENAME:-feature_analysis_supervised_wmdp_bio.json}"
 mkdir -p "$ABLATION_OUTPUT_DIR"
-METADATA_OUT="${METADATA_OUT:-${ABLATION_OUTPUT_DIR}/forget_ablation_metadata.json}"
-EVAL_JSON_OUT="${EVAL_JSON_OUT:-${ABLATION_OUTPUT_DIR}/ablation_eval_comparison.json}"
 RIDGE_LAMBDA="${RIDGE_LAMBDA:-1e-6}"
 RANDOM_SEED="${RANDOM_SEED:-1234}"
 ABLATION_DEVICE="${ABLATION_DEVICE:-auto}"
@@ -86,9 +84,6 @@ EVAL_WMDP_INCLUDE_PATH="${EVAL_WMDP_INCLUDE_PATH:-}"
 EVAL_WMDP_TASK_NAME="${EVAL_WMDP_TASK_NAME:-wmdp_bio_robust}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
 EVAL_MAX_LENGTH="${EVAL_MAX_LENGTH:-256}"
-EVAL_CACHE_DIR="${EVAL_CACHE_DIR:-./cache}"
-EVAL_DATASET_CACHE_DIR="${EVAL_DATASET_CACHE_DIR:-./cache}"
-EVAL_ENG_VALID_FILE="${EVAL_ENG_VALID_FILE:-/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl}"
 SKIP_EVAL="${SKIP_EVAL:-0}"
 RANDOM_BASELINE="${RANDOM_BASELINE:-1}"
 DOWN_PROJ_ONLY="${DOWN_PROJ_ONLY:-0}"
@@ -192,15 +187,10 @@ python create_forget_ablated_model.py \
   --forget-roles $FORGET_ROLES \
   --ridge-lambda "$RIDGE_LAMBDA" \
   --device "$ABLATION_DEVICE" \
-  --metadata-out "$METADATA_OUT" \
-  --eval-json-out "$EVAL_JSON_OUT" \
   --eval-device "$EVAL_DEVICE" \
   --eval-mode "$EVAL_MODE" \
   --eval-batch-size "$EVAL_BATCH_SIZE" \
   --eval-max-length "$EVAL_MAX_LENGTH" \
-  --eval-cache-dir "$EVAL_CACHE_DIR" \
-  --eval-dataset-cache-dir "$EVAL_DATASET_CACHE_DIR" \
-  --eval-eng-valid-file "$EVAL_ENG_VALID_FILE" \
   "${RANDOM_ARGS[@]}" \
   "${DOWN_ONLY_ARGS[@]}" \
   "${EVAL_ARGS[@]}"
@@ -210,5 +200,5 @@ echo "================================================================"
 echo " Pipeline complete."
 echo " SNMF dir:     $SNMF_OUTPUT_DIR"
 echo " Ablation log: $ABLATION_OUTPUT_DIR"
-echo " Eval JSON:    $EVAL_JSON_OUT"
+echo " Eval JSON:    $SAVE_PATH/ablation_eval_comparison.json"
 echo "================================================================"

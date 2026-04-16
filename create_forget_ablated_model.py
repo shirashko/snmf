@@ -360,12 +360,6 @@ def parse_args() -> argparse.Namespace:
         "matches analyze_snmf_results / utils.resolve_device for old GPUs).",
     )
     p.add_argument(
-        "--metadata-out",
-        type=str,
-        default="",
-        help="Optional JSON path describing per-layer forget column counts.",
-    )
-    p.add_argument(
         "--skip-eval",
         action="store_true",
         help="Do not run evaluation/eveluate_model.py before/after ablation.",
@@ -475,12 +469,11 @@ def main() -> None:
     local.tokenizer.save_pretrained(save_path)
     print(f"Saved edited model and tokenizer to {save_path}")
 
-    if args.metadata_out:
-        out = Path(args.metadata_out)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with open(out, "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2)
-        print(f"Wrote metadata to {out}")
+    metadata_out = save_path / "forget_ablation_metadata.json"
+    metadata_out.parent.mkdir(parents=True, exist_ok=True)
+    with open(metadata_out, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+    print(f"Wrote metadata to {metadata_out}")
 
     # Drop ablation model from memory before loading again for eval.
     del local
