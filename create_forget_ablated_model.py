@@ -64,7 +64,7 @@ def _run_standalone_eval_for_args(model_path: str, args: argparse.Namespace) -> 
         large_eval=args.eval_large,
         no_mmlu=args.eval_no_mmlu,
         wmdp_include_path=args.eval_wmdp_include_path,
-        wmdp_task_name=args.wmdp_task_name,
+        wmdp_task_name=args.eval_wmdp_task_name,
         device=args.eval_device,
         batch_size=args.eval_batch_size,
         max_length=EVAL_MAX_LENGTH,
