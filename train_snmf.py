@@ -15,7 +15,7 @@ from llm_utils.local_activation_generator import LocalActivationGenerator
 from data_utils.concept_dataset import SupervisedConceptDataset
 from factorization.seminmf import NMFSemiNMF
 from experiments.train.train import  parse_int_list
-from utils import set_seed, resolve_device
+from llm_utils.utils import set_seed, resolve_device
 
 # Load environment variables (HF_TOKEN)
 load_dotenv()

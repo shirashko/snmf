@@ -25,7 +25,7 @@ from supervised_analysis import (
     _marked_context_text,
     _sample_id_to_spans,
 )
-from utils import sorted_numeric_layer_dirs
+from llm_utils.utils import sorted_numeric_layer_dirs
 
 # Labels from data/bio_data.json (see data_utils/create_bio_data.py)
 BIO_FORGET_LABEL = "bio_forget"

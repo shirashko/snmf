@@ -43,7 +43,7 @@ import torch
 
 from evaluation.eveluate_model import run_standalone_eval
 from llm_utils.model_utils import load_local_model
-from utils import resolve_device, sorted_numeric_layer_dirs
+from llm_utils.utils import resolve_device, sorted_numeric_layer_dirs
 
 
 def _load_role_map(layer_dir: Path, supervised_json_filename: str) -> Dict[int, str]:

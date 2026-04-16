@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 
 from llm_utils.model_utils import load_local_model
-from utils import resolve_device, set_seed, sorted_numeric_layer_dirs
+from llm_utils.utils import resolve_device, set_seed, sorted_numeric_layer_dirs
 from wmdp_bio_supervised_analysis import (
     RETAIN_BASIS_CHOICES,
     RETAIN_BASIS_POOLED,

@@ -8,7 +8,7 @@ import seaborn as sns
 from pathlib import Path
 import json
 
-from utils import sorted_numeric_layer_dirs
+from llm_utils.utils import sorted_numeric_layer_dirs
 
 MULT_LABEL = "mult_concept"
 DIV_LABEL = "div_concept"
