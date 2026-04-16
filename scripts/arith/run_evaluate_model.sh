@@ -36,7 +36,7 @@ BATCH_SIZE="${BATCH_SIZE:-16}"
 MAX_LENGTH="${MAX_LENGTH:-256}"
 CACHE_DIR="${CACHE_DIR:-./cache}"
 DATASET_CACHE_DIR="${DATASET_CACHE_DIR:-./cache}"
-ENG_VALID_FILE="${ENG_VALID_FILE:-data/valid_eng.jsonl}"
+ENG_VALID_FILE="${ENG_VALID_FILE:-/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl}"
 RESULTS_JSON="${RESULTS_JSON:-outputs/eval_results/eval_${SLURM_JOB_ID:-local}_results.json}"
 
 # --- Execute Evaluation ---

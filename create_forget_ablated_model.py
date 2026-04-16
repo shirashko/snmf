@@ -267,8 +267,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--eval-eng-valid-file",
         type=str,
-        default="data/valid_eng.jsonl",
-        help="Relative to repo root if not absolute (same default as eveluate_model.py).",
+        default="/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl",
     )
     p.add_argument(
         "--eval-json-out",

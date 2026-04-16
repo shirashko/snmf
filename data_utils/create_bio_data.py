@@ -4,6 +4,7 @@ import random
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+BASE_DATASET_PATH = "/home/morg/students/rashkovits/Localized-UNDO/datasets"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -16,8 +17,7 @@ def parse_args() -> argparse.Namespace:
         "--remove-path",
         type=Path,
         default=Path(
-            "/home/morg/students/rashkovits/Localized-UNDO/datasets/wmdp/qa/"
-            "wmdp-bio_remove_dataset-combined.jsonl"
+            f"{BASE_DATASET_PATH}/wmdp/qa/wmdp-bio_remove_dataset-combined.jsonl"
         ),
         help="Path to remove split JSONL (mapped to label 'bio_forget').",
     )
@@ -25,15 +25,14 @@ def parse_args() -> argparse.Namespace:
         "--retain-path",
         type=Path,
         default=Path(
-            "/home/morg/students/rashkovits/Localized-UNDO/datasets/wmdp/qa/"
-            "wmdp-bio_retain_dataset-combined.jsonl"
+            f"{BASE_DATASET_PATH}/wmdp/qa/wmdp-bio_retain_dataset-combined.jsonl"
         ),
         help="Path to retain split JSONL (mapped to label 'bio_retain').",
     )
     parser.add_argument(
         "--neutral-path",
         type=Path,
-        default=Path("data/valid_eng.jsonl"),
+        default=Path(f"{BASE_DATASET_PATH}/pretrain/train_eng.jsonl"),
         help="Path to neutral JSONL (mapped to label 'neutral').",
     )
     parser.add_argument(
@@ -117,7 +116,7 @@ def sample_texts(texts: List[str], k: int, rng: random.Random, source_name: str)
     return rng.sample(texts, k)
 
 
-def sample_half_question_and_answer_half_answer_only(
+def sample_half_qa_half_a_only(
     question_answer_texts: List[str],
     answers: List[str],
     k: int,
@@ -147,6 +146,8 @@ def truncate_to_first_tokens(text: str, max_tokens: int) -> str:
 
 
 def main() -> None:
+    print("Starting bio data creation...")
+
     args = parse_args()
     rng = random.Random(args.seed)
 
@@ -162,7 +163,7 @@ def main() -> None:
             question_answer_texts, answers = load_qa_texts_and_answers(
                 source_path
             )
-            sampled_texts = sample_half_question_and_answer_half_answer_only(
+            sampled_texts = sample_half_qa_half_a_only(
                 question_answer_texts,
                 answers,
                 args.samples_per_label,

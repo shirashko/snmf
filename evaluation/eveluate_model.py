@@ -49,7 +49,7 @@ def run_standalone_eval(
     max_length=256,
     cache_dir="./cache",
     dataset_cache_dir="./cache",
-    eng_valid_file="data/valid_eng.jsonl",
+    eng_valid_file="/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl",
 ):
     resolved_device = resolve_eval_device(device)
     # When we load the model on CPU (e.g. sm_61 GPU + PyTorch sm_70+ wheels), the default
@@ -163,7 +163,7 @@ if __name__ == "__main__":
         default="wmdp_bio_robust",
         help="Task/group name defined in the included YAMLs (e.g., wmdp_bio_robust, wmdp_bio_shortcut, wmdp_bio_categorized_mcqa).",
     )
-    parser.add_argument("--eng-valid-file", default="data/valid_eng.jsonl")
+    parser.add_argument("--eng-valid-file", default="/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl")
     parser.add_argument("--output-json", default=None, help="Optional path to write eval results as JSON.")
     args = parser.parse_args()
 
