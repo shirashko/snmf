@@ -15,6 +15,43 @@ from evaluation.utils.process_datasets import make_sequence_length
 from evaluation.utils.loss_functions import forward_kl_loss_fn, cross_entropy_loss_fn, cross_entropy_loss_fn_only, print_acc, custom_login
 from evaluation.utils.generate_arithmetic import get_equations, get_template_word_problems
 
+MMLU_BIOLOGY_SUBJECTS = {
+    "college_biology",
+    "high_school_biology",
+    "medical_genetics",
+    "anatomy",
+    "virology",
+    "clinical_knowledge",
+}
+
+
+def _add_mmlu_bio_split_metrics(eval_dict, results, lim, num_fewshot):
+    """Add average MMLU scores for biology-related and non-biology subjects."""
+    biology_scores = []
+    non_biology_scores = []
+
+    for subtask_name, subtask_result in results.items():
+        if not subtask_name.startswith("mmlu_"):
+            continue
+        if subtask_name == "mmlu":
+            continue
+        if "acc,none" not in subtask_result:
+            continue
+
+        subject = subtask_name[len("mmlu_"):]
+        score = subtask_result["acc,none"]
+        if subject in MMLU_BIOLOGY_SUBJECTS:
+            biology_scores.append(score)
+        else:
+            non_biology_scores.append(score)
+
+    if biology_scores:
+        eval_dict[f"mmlu_biology_subjects_avg_limit_{lim}_shots_{num_fewshot}"] = sum(biology_scores) / len(biology_scores)
+        eval_dict[f"mmlu_biology_subject_count_limit_{lim}_shots_{num_fewshot}"] = len(biology_scores)
+    if non_biology_scores:
+        eval_dict[f"mmlu_non_biology_subjects_avg_limit_{lim}_shots_{num_fewshot}"] = sum(non_biology_scores) / len(non_biology_scores)
+        eval_dict[f"mmlu_non_biology_subject_count_limit_{lim}_shots_{num_fewshot}"] = len(non_biology_scores)
+
 
 def evaluate_kd_ce_ppl(student_model, teacher_model, data_loader, pad_token_id, accelerator, fn_only=False):
     """
@@ -234,6 +271,7 @@ def eval_model_lm_eval(
     task_list: List[str],
     limit: Optional[List[float]] = None,
     keep_all_subtasks: bool = False,
+    report_mmlu_bio_split: bool = False,
     include_path: Optional[str] = None,
 ):
     custom_login()
@@ -287,15 +325,18 @@ def eval_model_lm_eval(
             )
         results = results["results"]
 
+        eval_dict[f"{task}_limit_{lim}_shots_{num_fewshot}"] = results[task][
+            "acc,none"
+        ]
+
         if keep_all_subtasks:
             for subtask in results.keys():
                 eval_dict[f"{subtask}_limit_{lim}_shots_{num_fewshot}"] = results[
                     subtask
                 ]["acc,none"]
-        else:
-            eval_dict[f"{task}_limit_{lim}_shots_{num_fewshot}"] = results[task][
-                "acc,none"
-            ]
+
+        if report_mmlu_bio_split and task == "mmlu":
+            _add_mmlu_bio_split_metrics(eval_dict, results, lim, num_fewshot)
 
         eval_dict[f"{task} time"] = time.time() - task_start_time
 
@@ -386,9 +427,16 @@ def get_wmdp_cyber_eval_fn(accelerator, large_eval, no_mmlu=False):
         lim = [None, 0.40] if large_eval else [1000, .07]
         task_list = ["wmdp_cyber", "mmlu"]    
     seed = 1234 if large_eval else None
-    return lambda model, print_results: eval_model_lm_eval(model, print_results, seed=seed, accelerator=accelerator, task_list=task_list, limit=lim)
+    return lambda model, print_results: eval_model_lm_eval(
+        model,
+        print_results,
+        seed=seed,
+        accelerator=accelerator,
+        task_list=task_list,
+        limit=lim,
+    )
 
-def get_wmdp_bio_eval_fn(accelerator, large_eval, no_mmlu=False):
+def get_wmdp_bio_eval_fn(accelerator, large_eval, no_mmlu=False, report_mmlu_bio_split=False):
     if no_mmlu:
         lim = [None] if large_eval else [1000]
         task_list = ["wmdp_bio"]
@@ -396,7 +444,16 @@ def get_wmdp_bio_eval_fn(accelerator, large_eval, no_mmlu=False):
         lim = [None, 0.40] if large_eval else [1000, .07]
         task_list = ["wmdp_bio", "mmlu"]
     seed = 1234 if large_eval else None
-    return lambda model, print_results: eval_model_lm_eval(model, print_results, seed=seed, accelerator=accelerator, task_list=task_list, limit=lim)
+    return lambda model, print_results: eval_model_lm_eval(
+        model,
+        print_results,
+        seed=seed,
+        accelerator=accelerator,
+        task_list=task_list,
+        limit=lim,
+        keep_all_subtasks=report_mmlu_bio_split,
+        report_mmlu_bio_split=report_mmlu_bio_split,
+    )
     
 def get_both_wmdp_eval_fn(accelerator, large_eval):
     lim = [None, None, 0.40] if large_eval else [1000, 1000, .07]

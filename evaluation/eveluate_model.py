@@ -41,6 +41,7 @@ def run_standalone_eval(
     eval_mode="arithmetic",
     large_eval=False,
     no_mmlu=False,
+    report_mmlu_bio_split=False,
     wmdp_include_path="",
     wmdp_task_name="wmdp_bio_robust",
     device="cuda",
@@ -82,6 +83,7 @@ def run_standalone_eval(
             accelerator=accelerator,
             large_eval=large_eval,
             no_mmlu=no_mmlu,
+            report_mmlu_bio_split=report_mmlu_bio_split,
         )
     elif eval_mode == "wmdp_cyber":
         eval_factory = get_wmdp_cyber_eval_fn(
@@ -141,6 +143,11 @@ if __name__ == "__main__":
         action="store_true",
         help="For single-domain WMDP modes, skip MMLU.",
     )
+    parser.add_argument(
+        "--report-mmlu-bio-split",
+        action="store_true",
+        help="For runs including MMLU, also report MMLU biology-subject and non-biology-subject averages.",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--max-length", type=int, default=256)
@@ -165,6 +172,7 @@ if __name__ == "__main__":
         eval_mode=args.eval_mode,
         large_eval=args.large_eval,
         no_mmlu=args.no_mmlu,
+        report_mmlu_bio_split=args.report_mmlu_bio_split,
         wmdp_include_path=args.wmdp_include_path,
         wmdp_task_name=args.wmdp_task_name,
         device=args.device,
