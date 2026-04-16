@@ -45,6 +45,8 @@ from evaluation.eveluate_model import run_standalone_eval
 from llm_utils.model_utils import load_local_model
 from llm_utils.utils import resolve_device, sorted_numeric_layer_dirs
 
+EVAL_ENG_VALID_FILE = "/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl"
+
 
 def _load_role_map(layer_dir: Path, supervised_json_filename: str) -> Dict[int, str]:
     path = layer_dir / supervised_json_filename
@@ -415,11 +417,6 @@ def parse_args() -> argparse.Namespace:
         default=256,
     )
     p.add_argument(
-        "--eval-eng-valid-file",
-        type=str,
-        default="/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl",
-    )
-    p.add_argument(
         "--eval-json-out",
         type=str,
         default="",
@@ -457,7 +454,7 @@ def main() -> None:
             max_length=args.eval_max_length,
             cache_dir= cache_dir,
             dataset_cache_dir=cache_dir,
-            eng_valid_file=args.eval_eng_valid_file,
+            eng_valid_file=EVAL_ENG_VALID_FILE,
         )
         gc.collect()
         if torch.cuda.is_available():
@@ -511,7 +508,7 @@ def main() -> None:
             max_length=args.eval_max_length,
             cache_dir= cache_dir,
             dataset_cache_dir= cache_dir,
-            eng_valid_file=args.eval_eng_valid_file,
+            eng_valid_file=EVAL_ENG_VALID_FILE,
         )
         assert results_before is not None
         _print_eval_comparison(results_before, results_after)
@@ -575,7 +572,7 @@ def main() -> None:
                 max_length=args.eval_max_length,
                 cache_dir= cache_dir,
                 dataset_cache_dir= cache_dir,
-                eng_valid_file=args.eval_eng_valid_file,
+                eng_valid_file=EVAL_ENG_VALID_FILE,
             )
             assert results_before is not None and results_after is not None
             print("\n--- Learned-direction ablation vs random baseline ---")
