@@ -20,7 +20,6 @@ from wmdp_bio_supervised_analysis import (
     analyze_features_supervised_wmdp_bio,
     plot_layer_wmdp_bio_trends,
 )
-from unsupervised_analysis import analyze_features_unsupervised
 
 ANALYSIS_OVERVIEW = (
     "Each SNMF column is one latent. Unary supervised JSON stores per-latent log-ratios: "
@@ -58,10 +57,8 @@ def main() -> None:
             "or bio_retain only. All three forget-vs-side log-ratios are still written per latent."
         ),
     )
-    parser.add_argument("--skip-vocab", action="store_true")
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--top-k-unsupervised", type=int, default=30)
     parser.add_argument(
         "--activation-context-top-n",
         type=int,
@@ -136,18 +133,6 @@ def main() -> None:
             f"  Layer {layer_num}: {n_features} latents | roles: "
             + ", ".join(f"{r}={c}" for r, c in sorted(layer_roles.items()))
         )
-
-        if not args.skip_vocab:
-            unsupervised_results = analyze_features_unsupervised(
-                F=F,
-                local_model=local_model,
-                layer=layer_num,
-                mode=mode,
-                top_k_tokens=args.top_k_unsupervised,
-            )
-            out_unsup = layer_folder / "feature_analysis_unsupervised_wmdp_bio.json"
-            with open(out_unsup, "w", encoding="utf-8") as f:
-                json.dump(unsupervised_results, f, indent=2, ensure_ascii=False)
 
     print("\nGenerating WMDP-bio trend plots (one PNG per retain basis)...")
     for basis in sorted(RETAIN_BASIS_CHOICES):

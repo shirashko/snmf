@@ -150,10 +150,8 @@ else
     --supervised-retain-basis pooled \
     --device "$ANALYZE_DEVICE" \
     --seed "$ANALYZE_SEED" \
-    --top-k-unsupervised 30 \
     --activation-context-top-n 10 \
-    --activation-context-window 15 \
-    --skip-vocab
+    --activation-context-window 15
   echo "[2/3] Analysis finished ($SNMF_OUTPUT_DIR/$SUMMARY_FILE)."
 fi
 

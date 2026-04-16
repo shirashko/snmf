@@ -135,10 +135,8 @@ python wmdp_bio_analyze_snmf_results.py \
     --supervised-retain-basis "$SUPERVISED_RETAIN_BASIS" \
     --device "$ANALYZE_DEVICE" \
     --seed "$ANALYZE_SEED" \
-    --top-k-unsupervised 30 \
     --activation-context-top-n 10 \
     --activation-context-window 15
-    # Add --skip-vocab above if you want a faster run without vocab context.
 
 echo "--------------------------------------------------------"
 echo "WMDP-bio SNMF analysis finished"
