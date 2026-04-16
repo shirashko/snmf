@@ -47,6 +47,7 @@ from llm_utils.utils import resolve_device, sorted_numeric_layer_dirs
 
 EVAL_ENG_VALID_FILE = "/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl"
 EVAL_MAX_LENGTH = 256
+CACHE_DIR = "./cache"
 
 def _load_role_map(layer_dir: Path, supervised_json_filename: str) -> Dict[int, str]:
     path = layer_dir / supervised_json_filename
@@ -418,7 +419,6 @@ def main() -> None:
     args = parse_args()
     results_dir = Path(args.results_dir)
     forget_roles = set(args.forget_roles)
-    cache_dir = "./cache"
 
     results_before: Dict[str, Any] | None = None
     results_after: Dict[str, Any] | None = None
@@ -435,8 +435,8 @@ def main() -> None:
             device=args.eval_device,
             batch_size=args.eval_batch_size,
             max_length=EVAL_MAX_LENGTH,
-            cache_dir= cache_dir,
-            dataset_cache_dir=cache_dir,
+            CACHE_DIR= CACHE_DIR,
+            dataset_CACHE_DIR= CACHE_DIR,
             eng_valid_file=EVAL_ENG_VALID_FILE,
         )
         gc.collect()
@@ -488,8 +488,8 @@ def main() -> None:
             device=args.eval_device,
             batch_size=args.eval_batch_size,
             max_length=EVAL_MAX_LENGTH,
-            cache_dir= cache_dir,
-            dataset_cache_dir= cache_dir,
+            CACHE_DIR= CACHE_DIR,
+            dataset_CACHE_DIR= CACHE_DIR,
             eng_valid_file=EVAL_ENG_VALID_FILE,
         )
         assert results_before is not None
@@ -548,8 +548,8 @@ def main() -> None:
                 device=args.eval_device,
                 batch_size=args.eval_batch_size,
                 max_length=EVAL_MAX_LENGTH,
-                cache_dir= cache_dir,
-                dataset_cache_dir= cache_dir,
+                CACHE_DIR= CACHE_DIR,
+                dataset_CACHE_DIR= CACHE_DIR,
                 eng_valid_file=EVAL_ENG_VALID_FILE,
             )
             assert results_before is not None and results_after is not None
