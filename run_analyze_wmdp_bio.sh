@@ -13,7 +13,7 @@
 #SBATCH --mem=80G
 
 # WMDP-bio pipeline: analyze SNMF factors trained with data/bio_data.json (see train_snmf.sh).
-# Labels are bio_forget vs neutral (see wmdp_bio_supervised_analysis.py); checkpoint stores them.
+# Labels: bio_forget, bio_retain, neutral (see wmdp_bio_supervised_analysis.py); checkpoint stores them.
 #   train_snmf.sh  ->  RESULTS_DIR/layer_*/snmf_factors.pt
 #   this script    ->  wmdp_bio_analyze_snmf_results.py -> *_wmdp_bio.json + SUMMARY_FILE
 
@@ -42,6 +42,8 @@ RESULTS_DIR="${RESULTS_DIR:-outputs/snmf_train_results_wmdp_bio_gemma2_2b}"
 SUMMARY_FILE="${SUMMARY_FILE:-analysis_summary_wmdp_bio.json}"
 ANALYZE_DEVICE="${ANALYZE_DEVICE:-cuda}"
 ANALYZE_SEED="${ANALYZE_SEED:-42}"
+# pooled | neutral | bio_retain — which comparison drives role_label (all ratios still in JSON + 3 trend PNGs)
+SUPERVISED_RETAIN_BASIS="${SUPERVISED_RETAIN_BASIS:-pooled}"
 REQUIRE_GPU="${REQUIRE_GPU:-1}"   # 1 => fail fast if CUDA GPU is not usable
 VERIFY_DATA_PATH="${VERIFY_DATA_PATH:-1}"  # 1 => warn if checkpoint config data_path != DATA_PATH
 
@@ -118,6 +120,7 @@ echo "Training data file (for traceability): $DATA_PATH"
 echo "Results directory (SNMF train output): $RESULTS_DIR"
 echo "Per-run summary: $RESULTS_DIR/$SUMMARY_FILE"
 echo "Analyze device: $ANALYZE_DEVICE"
+echo "Supervised retain basis (role_label): $SUPERVISED_RETAIN_BASIS"
 if command -v nvidia-smi >/dev/null 2>&1; then
   echo "Visible GPUs:"
   nvidia-smi -L || true
@@ -129,6 +132,7 @@ python wmdp_bio_analyze_snmf_results.py \
     --results-dir "$RESULTS_DIR" \
     --summary-filename "$SUMMARY_FILE" \
     --role-assignment-threshold 0.05 \
+    --supervised-retain-basis "$SUPERVISED_RETAIN_BASIS" \
     --device "$ANALYZE_DEVICE" \
     --seed "$ANALYZE_SEED" \
     --top-k-unsupervised 30 \
