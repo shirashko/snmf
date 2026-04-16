@@ -285,19 +285,19 @@ def parse_args() -> argparse.Namespace:
         "--model-path",
         type=str,
         required=True,
-        help="Same base model as train_snmf.py / analyze_snmf_results.py.",
+        help="Same model used in train_snmf.py and analyze_snmf_results.py.",
     )
     p.add_argument(
         "--results-dir",
         type=str,
-        default="outputs/snmf_train_results",
-        help="SNMF output dir with layer_*/ (default: scripts/wmdp/train_snmf.sh --output-dir).",
+        required=True,
+        help="SNMF output dir with layer_*/. subdirs in it that contain snmf_factors.pt and feature_analysis_supervised.json.",
     )
     p.add_argument(
         "--save-path",
         type=str,
-        default="local_models/gemma-2-0.3B_forget_ablated",
-        help="Directory for save_pretrained (default: sibling of reference model).",
+        required=True,
+        help="Directory for saving the ablated model. This directory will be created if it does not exist.",
     )
     p.add_argument(
         "--save-path-random",
@@ -415,16 +415,6 @@ def parse_args() -> argparse.Namespace:
         default=256,
     )
     p.add_argument(
-        "--eval-cache-dir",
-        type=str,
-        default="./cache",
-    )
-    p.add_argument(
-        "--eval-dataset-cache-dir",
-        type=str,
-        default="./cache",
-    )
-    p.add_argument(
         "--eval-eng-valid-file",
         type=str,
         default="/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl",
@@ -448,6 +438,7 @@ def main() -> None:
     args = parse_args()
     results_dir = Path(args.results_dir)
     forget_roles = set(args.forget_roles)
+    cache_dir = "./cache"
 
     results_before: Dict[str, Any] | None = None
     results_after: Dict[str, Any] | None = None
@@ -464,8 +455,8 @@ def main() -> None:
             device=args.eval_device,
             batch_size=args.eval_batch_size,
             max_length=args.eval_max_length,
-            cache_dir=args.eval_cache_dir,
-            dataset_cache_dir=args.eval_dataset_cache_dir,
+            cache_dir= cache_dir,
+            dataset_cache_dir=cache_dir,
             eng_valid_file=args.eval_eng_valid_file,
         )
         gc.collect()
@@ -518,8 +509,8 @@ def main() -> None:
             device=args.eval_device,
             batch_size=args.eval_batch_size,
             max_length=args.eval_max_length,
-            cache_dir=args.eval_cache_dir,
-            dataset_cache_dir=args.eval_dataset_cache_dir,
+            cache_dir= cache_dir,
+            dataset_cache_dir= cache_dir,
             eng_valid_file=args.eval_eng_valid_file,
         )
         assert results_before is not None
@@ -582,8 +573,8 @@ def main() -> None:
                 device=args.eval_device,
                 batch_size=args.eval_batch_size,
                 max_length=args.eval_max_length,
-                cache_dir=args.eval_cache_dir,
-                dataset_cache_dir=args.eval_dataset_cache_dir,
+                cache_dir= cache_dir,
+                dataset_cache_dir= cache_dir,
                 eng_valid_file=args.eval_eng_valid_file,
             )
             assert results_before is not None and results_after is not None
