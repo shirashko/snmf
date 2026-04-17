@@ -7,11 +7,16 @@ import argparse
 import json
 from collections import Counter
 from pathlib import Path
-
 import torch
 
 from llm_utils.model_utils import load_local_model
-from llm_utils.utils import resolve_device, set_seed, sorted_numeric_layer_dirs
+from llm_utils.utils import (
+    resolve_absolute_path,
+    resolve_device,
+    set_seed,
+    sorted_numeric_layer_dirs,
+    verify_checkpoint_data_path,
+)
 from wmdp_bio_supervised_analysis import (
     RETAIN_BASIS_BIO_RETAIN,
     RETAIN_BASIS_CHOICES,
@@ -73,11 +78,21 @@ def main() -> None:
         default="analysis_summary_wmdp_bio.json",
         help="Written under --results-dir (global role counts and meanings).",
     )
+    parser.add_argument(
+        "--data-path",
+        type=str,
+        required=True,
+        help=(
+            "Expected training data path for consistency check against checkpoint "
+            "config['data_path'] in each layer."
+        ),
+    )
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
     set_seed(args.seed)
     device = resolve_device(args.device)
+    expected_data_path = resolve_absolute_path(args.data_path)
 
     print(f"Loading model from {args.model_path}...")
     local_model = load_local_model(args.model_path, device=device)
@@ -101,6 +116,12 @@ def main() -> None:
         F, G = checkpoint["F"], checkpoint["G"]
         token_ids, sample_ids = checkpoint["token_ids"], checkpoint["sample_ids"]
         labels, mode = checkpoint["labels"], checkpoint.get("mode", "mlp_intermediate")
+
+        verify_checkpoint_data_path(
+            checkpoint=checkpoint,
+            expected_data_path=expected_data_path,
+            layer_num=layer_num,
+        )
 
         supervised_results = analyze_features_supervised_wmdp_bio(
             G,
@@ -167,6 +188,10 @@ def main() -> None:
             "log_forget_vs_bio_retain, and log_bio_retain_vs_neutral when counts allow."
         ),
         "role_assignment_threshold": args.role_assignment_threshold,
+        "data_path_verification": {
+            "enabled": True,
+            "expected_data_path": str(expected_data_path),
+        },
         "threshold_note": (
             "Minimum natural-log ratio margin for bio_forget_lean vs retain_lean vs weak_mixed; "
             "see wmdp_bio_supervised_analysis._assign_role_label_bio."

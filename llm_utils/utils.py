@@ -3,7 +3,7 @@ import re
 import pickle
 import warnings
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -111,3 +111,37 @@ def sorted_numeric_layer_dirs(results_dir: Path) -> List[Tuple[int, Path]]:
             found.append((int(m.group(1)), p))
     found.sort(key=lambda t: t[0])
     return found
+
+
+def resolve_absolute_path(path_str: str, cwd: Optional[Path] = None) -> Path:
+    """Resolve a path string to an absolute canonical path."""
+    p = Path(path_str)
+    if p.is_absolute():
+        return p.resolve()
+    base = cwd if cwd is not None else Path.cwd()
+    return (base / p).resolve()
+
+
+def verify_checkpoint_data_path(
+    checkpoint: Dict[str, Any],
+    expected_data_path: Path,
+    layer_num: int,
+) -> None:
+    """
+    Check checkpoint config['data_path'] against expected_data_path.
+    Raises ValueError when missing or inconsistent.
+    """
+    cfg = checkpoint.get("config") or {}
+    ck_data_path = cfg.get("data_path")
+    if not ck_data_path:
+        raise ValueError(
+            f"WARNING: layer {layer_num} checkpoint has no config['data_path']; "
+            "cannot verify data-path consistency."
+        )
+
+    data_ck = resolve_absolute_path(str(ck_data_path))
+    if data_ck != expected_data_path:
+        raise ValueError(
+            f"Layer {layer_num} checkpoint data_path mismatch: "
+            f"checkpoint={data_ck} expected={expected_data_path}"
+        )

@@ -12,8 +12,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=80G
 
-# WMDP-bio pipeline: analyze SNMF factors trained with data/bio_data.json (see scripts/wmdp/train_snmf.sh).
-# Labels: bio_forget, bio_retain, neutral (see wmdp_bio_supervised_analysis.py); checkpoint stores them.
+# WMDP-bio pipeline: analyze SNMF factors (see scripts/wmdp/train_snmf.sh).
 #   scripts/wmdp/train_snmf.sh  ->  RESULTS_DIR/layer_*/snmf_factors.pt
 #   this script    ->  wmdp_bio_analyze_snmf_results.py -> *_wmdp_bio.json + SUMMARY_FILE
 
@@ -43,48 +42,10 @@ SUMMARY_FILE="${SUMMARY_FILE:-analysis_summary_wmdp_bio.json}"
 ANALYZE_DEVICE="${ANALYZE_DEVICE:-cuda}"
 ANALYZE_SEED="${ANALYZE_SEED:-42}"
 REQUIRE_GPU="${REQUIRE_GPU:-1}"   # 1 => fail fast if CUDA GPU is not usable
-VERIFY_DATA_PATH="${VERIFY_DATA_PATH:-1}"  # 1 => warn if checkpoint config data_path != DATA_PATH
-
-export RESULTS_DIR DATA_PATH
 
 # --- Parallelism Optimization ---
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
-
-# --- Optional: confirm factors match the intended bio_data.json (stored in train checkpoint config) ---
-if [[ "$VERIFY_DATA_PATH" == "1" && -f "$RESULTS_DIR/layer_0/snmf_factors.pt" ]]; then
-  python3 - <<PY
-import os
-from pathlib import Path
-import torch
-
-results = Path(os.environ["RESULTS_DIR"])
-data_expected = Path(os.environ["DATA_PATH"])
-if not data_expected.is_absolute():
-    data_expected = (Path.cwd() / data_expected).resolve()
-
-ck_path = results / "layer_0" / "snmf_factors.pt"
-ck = torch.load(ck_path, map_location="cpu", weights_only=False)
-cfg = ck.get("config") or {}
-dp = cfg.get("data_path")
-if dp:
-    data_ck = Path(dp)
-    if not data_ck.is_absolute():
-        data_ck = (Path.cwd() / data_ck).resolve()
-    else:
-        data_ck = data_ck.resolve()
-    if data_ck != data_expected:
-        print(
-            f"[run_analyze_wmdp_bio.sh] WARNING: checkpoint data_path ({data_ck}) "
-            f"!= DATA_PATH ({data_expected}). Analysis uses labels inside the checkpoint; "
-            f"override VERIFY_DATA_PATH=0 to silence."
-        )
-    else:
-        print(f"[run_analyze_wmdp_bio.sh] Checkpoint data_path matches DATA_PATH: {data_expected}")
-else:
-    print("[run_analyze_wmdp_bio.sh] No data_path in checkpoint config; skipping path check.")
-PY
-fi
 
 # --- GPU Preflight ---
 if [[ "$REQUIRE_GPU" == "1" && "$ANALYZE_DEVICE" == cuda* ]]; then
@@ -125,14 +86,15 @@ fi
 echo "--------------------------------------------------------"
 
 python wmdp_bio_analyze_snmf_results.py \
-    --model-path "$MODEL_PATH" \
-    --results-dir "$RESULTS_DIR" \
-    --summary-filename "$SUMMARY_FILE" \
-    --role-assignment-threshold 0.05 \
-    --device "$ANALYZE_DEVICE" \
-    --seed "$ANALYZE_SEED" \
-    --activation-context-top-n 10 \
-    --activation-context-window 15
+  --model-path "$MODEL_PATH" \
+  --results-dir "$RESULTS_DIR" \
+  --summary-filename "$SUMMARY_FILE" \
+  --data-path "$DATA_PATH" \
+  --role-assignment-threshold 0.05 \
+  --device "$ANALYZE_DEVICE" \
+  --seed "$ANALYZE_SEED" \
+  --activation-context-top-n 10 \
+  --activation-context-window 15
 
 echo "--------------------------------------------------------"
 echo "WMDP-bio SNMF analysis finished"
