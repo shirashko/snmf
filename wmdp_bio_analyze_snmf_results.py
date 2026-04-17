@@ -42,7 +42,7 @@ ANALYSIS_OVERVIEW = (
 )
 
 
-def main() -> None:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze SNMF results (WMDP-bio / bio_data.json).")
     parser.add_argument("--model-path", type=str, required=True)
     parser.add_argument(
@@ -54,9 +54,9 @@ def main() -> None:
     parser.add_argument(
         "--role-assignment-threshold",
         type=float,
-        default=0.15,
+        required=True,
         metavar="LOG_RATIO",
-        help="Minimum |log(mean_forget/mean_retain_side)| margin for bio_forget_lean / retain_lean.",
+        help="Minimum |log(mean_forget/mean_retain_side)| margin for role assignment.",
     )
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
@@ -87,7 +87,11 @@ def main() -> None:
             "config['data_path'] in each layer."
         ),
     )
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
 
     results_dir = Path(args.results_dir)
     set_seed(args.seed)
