@@ -281,7 +281,6 @@ def analyze_features_supervised_wmdp_bio(
     forget_labels: frozenset = FORGET_LABELS,
     retain_labels: frozenset = RETAIN_LABELS,
     role_assignment_threshold: float = 0.15,
-    retain_basis: str = RETAIN_BASIS_POOLED,
 ) -> Dict[int, Dict[str, Any]]:
     """
     Per-latent prompt-mean peak activations for bio_forget vs retain splits.
@@ -292,15 +291,16 @@ def analyze_features_supervised_wmdp_bio(
       - bio_retain-only,
     plus log(mean_bio_retain / mean_neutral) when both retain buckets exist.
 
-    ``retain_basis`` selects which forget-vs-retain comparison sets ``role_label``.
+    Stores role labels for all retain bases:
+      - pooled
+      - neutral
+      - bio_retain
+    under ``role_labels_by_basis``.
+    ``role_label`` remains as a backward-compatible alias for pooled.
     """
-    if retain_basis not in RETAIN_BASIS_CHOICES:
-        raise ValueError(
-            f"retain_basis must be one of {sorted(RETAIN_BASIS_CHOICES)}, got {retain_basis!r}"
-        )
     print(
-        f"Profiling latents (WMDP-bio supervised: bio_forget vs retain; "
-        f"role_basis={retain_basis})..."
+        "Profiling latents (WMDP-bio supervised: bio_forget vs retain; "
+        "role labels for pooled/neutral/bio_retain)..."
     )
 
     _, n_latents = feature_acts.shape
@@ -368,29 +368,35 @@ def analyze_features_supervised_wmdp_bio(
             else None
         )
 
-        if retain_basis == RETAIN_BASIS_POOLED:
-            n_r, mean_r, log_fr = n_pooled, mean_pooled, log_forget_vs_pooled
-        elif retain_basis == RETAIN_BASIS_NEUTRAL:
-            n_r, mean_r, log_fr = n_neutral, mean_neutral, log_forget_vs_neutral
-        else:
-            n_r, mean_r, log_fr = n_bio_retain, mean_bio_retain, log_forget_vs_bio_retain
-
-        if log_fr is None or n_forget == 0 or n_r == 0:
-            role_label = "insufficient_groups"
-        else:
-            role_label = _assign_role_label_bio(
-                log_fr,
-                mean_forget,
-                mean_r,
-                n_forget,
-                n_r,
-                role_assignment_threshold,
-            )
+        basis_metrics = {
+            RETAIN_BASIS_POOLED: (n_pooled, mean_pooled, log_forget_vs_pooled),
+            RETAIN_BASIS_NEUTRAL: (n_neutral, mean_neutral, log_forget_vs_neutral),
+            RETAIN_BASIS_BIO_RETAIN: (
+                n_bio_retain,
+                mean_bio_retain,
+                log_forget_vs_bio_retain,
+            ),
+        }
+        role_labels_by_basis: Dict[str, str] = {}
+        for basis, (n_r, mean_r, log_fr) in basis_metrics.items():
+            if log_fr is None or n_forget == 0 or n_r == 0:
+                role_labels_by_basis[basis] = "insufficient_groups"
+            else:
+                role_labels_by_basis[basis] = _assign_role_label_bio(
+                    log_fr,
+                    mean_forget,
+                    mean_r,
+                    n_forget,
+                    n_r,
+                    role_assignment_threshold,
+                )
+        role_label = role_labels_by_basis[RETAIN_BASIS_POOLED]
 
         col_sq = float(np.sum(col**2))
         profile: Dict[str, Any] = {
             "role_label": role_label,
-            "retain_basis_used": retain_basis,
+            "role_labels_by_basis": role_labels_by_basis,
+            "retain_basis_used": RETAIN_BASIS_POOLED,
             "group_sums": {
                 "bio_forget": round(sum_forget, 6),
                 "neutral": round(sum_neutral, 6),
@@ -482,13 +488,11 @@ def analyze_features_supervised_wmdp_bio(
     for idx, p in feature_profiles.items():
         role_map.setdefault(p["role_label"], []).append(idx)
 
-    _sort_key = {
-        RETAIN_BASIS_POOLED: "log_forget_vs_pooled_retain",
-        RETAIN_BASIS_NEUTRAL: "log_forget_vs_neutral",
-        RETAIN_BASIS_BIO_RETAIN: "log_forget_vs_bio_retain",
-    }[retain_basis]
-
-    print(f"\nLatent summary by role_label (WMDP-bio; top 5 per role by {_sort_key}):")
+    _sort_key = "log_forget_vs_pooled_retain"
+    print(
+        "\nLatent summary by role_label (WMDP-bio; top 5 per role by pooled "
+        "log_forget_vs_pooled_retain):"
+    )
     for role in sorted(role_map.keys()):
         indices = role_map[role]
         indices.sort(

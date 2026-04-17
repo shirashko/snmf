@@ -13,7 +13,9 @@ import torch
 from llm_utils.model_utils import load_local_model
 from llm_utils.utils import resolve_device, set_seed, sorted_numeric_layer_dirs
 from wmdp_bio_supervised_analysis import (
+    RETAIN_BASIS_BIO_RETAIN,
     RETAIN_BASIS_CHOICES,
+    RETAIN_BASIS_NEUTRAL,
     RETAIN_BASIS_POOLED,
     ROLE_LABEL_MEANINGS,
     ROLE_LABEL_ORDER,
@@ -22,12 +24,16 @@ from wmdp_bio_supervised_analysis import (
 )
 
 ANALYSIS_OVERVIEW = (
-    "Each SNMF column is one latent. Unary supervised JSON stores per-latent log-ratios: "
-    "bio_forget vs pooled retain (neutral ∪ bio_retain), vs neutral-only, vs bio_retain-only, "
-    "and log(mean_bio_retain/mean_neutral) when both retain buckets exist. "
-    "role_label uses one chosen basis (--supervised-retain-basis: pooled | neutral | bio_retain) "
-    "with the same threshold on log(mean_forget/mean_retain_side). "
-    "Counts are how many latents received each unary role label, per layer and in total."
+    "Each SNMF column represents one latent feature. The analysis profiles each latent by "
+    "calculating a mathematical score (log-ratio) that measures how much its activation "
+    "differs between 'dangerous' (bio_forget) and 'safe' (retain) data. "
+    "These log-ratios compare the bio_forget group against three distinct benchmarks:\n"
+    "1. Pooled Retain: A combination of neutral and bio-retain data.\n"
+    "2. Neutral Only: General domain data (e.g., Wikipedia).\n"
+    "3. Bio-Retain Only: Safe biological data.\n\n"
+    "Role labels are assigned independently for each benchmark (pooled, neutral, bio_retain), "
+    "so every latent gets a per-basis role map. Finally, the script aggregates counts by basis "
+    "per layer and globally, letting downstream analysis choose which basis to use."
 )
 
 
@@ -46,16 +52,6 @@ def main() -> None:
         default=0.15,
         metavar="LOG_RATIO",
         help="Minimum |log(mean_forget/mean_retain_side)| margin for bio_forget_lean / retain_lean.",
-    )
-    parser.add_argument(
-        "--supervised-retain-basis",
-        type=str,
-        default=RETAIN_BASIS_POOLED,
-        choices=sorted(RETAIN_BASIS_CHOICES),
-        help=(
-            "Which retain pool sets role_label: pooled (neutral+bio_retain), neutral only, "
-            "or bio_retain only. All three forget-vs-side log-ratios are still written per latent."
-        ),
     )
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
@@ -87,7 +83,10 @@ def main() -> None:
     local_model = load_local_model(args.model_path, device=device)
 
     per_layer_stats: list[dict] = []
-    global_role_counts: Counter[str] = Counter()
+    basis_order = [RETAIN_BASIS_POOLED, RETAIN_BASIS_NEUTRAL, RETAIN_BASIS_BIO_RETAIN]
+    global_role_counts_by_basis: dict[str, Counter[str]] = {
+        basis: Counter() for basis in basis_order
+    }
 
     for layer_num, layer_folder in sorted_numeric_layer_dirs(results_dir):
         factors_path = layer_folder / "snmf_factors.pt"
@@ -110,7 +109,6 @@ def main() -> None:
             token_ids,
             local_model.tokenizer,
             role_assignment_threshold=args.role_assignment_threshold,
-            retain_basis=args.supervised_retain_basis,
             context_top_n=args.activation_context_top_n,
             context_window=args.activation_context_window,
         )
@@ -119,20 +117,28 @@ def main() -> None:
             json.dump(supervised_results, f, indent=2, ensure_ascii=False)
 
         n_features = len(supervised_results)
-        layer_roles = Counter(
-            supervised_results[k].get("role_label", "unknown") for k in supervised_results
-        )
-        global_role_counts.update(layer_roles)
+        layer_counts_by_basis: dict[str, dict[str, int]] = {}
+        for basis in basis_order:
+            layer_roles = Counter(
+                supervised_results[k]
+                .get("role_labels_by_basis", {})
+                .get(basis, supervised_results[k].get("role_label", "unknown"))
+                for k in supervised_results
+            )
+            layer_counts_by_basis[basis] = dict(layer_roles)
+            global_role_counts_by_basis[basis].update(layer_roles)
         layer_entry: dict = {
             "layer": layer_num,
             "features_explored": n_features,
-            "counts_by_role": dict(layer_roles),
+            "counts_by_role_by_basis": layer_counts_by_basis,
         }
         per_layer_stats.append(layer_entry)
-        print(
-            f"  Layer {layer_num}: {n_features} latents | roles: "
-            + ", ".join(f"{r}={c}" for r, c in sorted(layer_roles.items()))
-        )
+        layer_print_chunks = []
+        for basis in basis_order:
+            basis_counts = layer_counts_by_basis[basis]
+            compact = ", ".join(f"{r}={c}" for r, c in sorted(basis_counts.items()))
+            layer_print_chunks.append(f"{basis}: {compact}")
+        print(f"  Layer {layer_num}: {n_features} latents | " + " | ".join(layer_print_chunks))
 
     print("\nGenerating WMDP-bio trend plots (one PNG per retain basis)...")
     for basis in sorted(RETAIN_BASIS_CHOICES):
@@ -143,20 +149,22 @@ def main() -> None:
 
     total_features = sum(s["features_explored"] for s in per_layer_stats)
     summary_path = results_dir / args.summary_filename
-    ordered_global: dict[str, int] = {r: global_role_counts.get(r, 0) for r in ROLE_LABEL_ORDER}
-    for label, c in global_role_counts.items():
-        if label not in ordered_global:
-            ordered_global[label] = c
+    ordered_global_by_basis: dict[str, dict[str, int]] = {}
+    for basis in basis_order:
+        basis_counts = global_role_counts_by_basis[basis]
+        ordered_global = {r: basis_counts.get(r, 0) for r in ROLE_LABEL_ORDER}
+        for label, c in basis_counts.items():
+            if label not in ordered_global:
+                ordered_global[label] = c
+        ordered_global_by_basis[basis] = ordered_global
 
     summary_doc = {
         "overview": ANALYSIS_OVERVIEW,
         "pipeline": "wmdp_bio",
-        "supervised_retain_basis": args.supervised_retain_basis,
         "retain_basis_note": (
-            f"role_label used log(mean_forget/mean_retain) with retain side "
-            f"{args.supervised_retain_basis!r}. Per-latent JSON also includes "
-            "log_forget_vs_pooled_retain, log_forget_vs_neutral, log_forget_vs_bio_retain, "
-            "and log_bio_retain_vs_neutral when counts allow."
+            "Per-latent JSON includes role_labels_by_basis for pooled / neutral / bio_retain, "
+            "plus log_forget_vs_pooled_retain, log_forget_vs_neutral, "
+            "log_forget_vs_bio_retain, and log_bio_retain_vs_neutral when counts allow."
         ),
         "role_assignment_threshold": args.role_assignment_threshold,
         "threshold_note": (
@@ -165,7 +173,7 @@ def main() -> None:
         ),
         "total_features_explored": total_features,
         "layers_processed": len(per_layer_stats),
-        "global_counts_by_role": ordered_global,
+        "global_counts_by_role_by_basis": ordered_global_by_basis,
         "per_layer": per_layer_stats,
         "role_meanings": ROLE_LABEL_MEANINGS,
     }
@@ -174,13 +182,16 @@ def main() -> None:
         json.dump(summary_doc, f, indent=2, ensure_ascii=False)
 
     print("\n--- Global role counts (WMDP-bio, all layers) ---")
-    for r in ROLE_LABEL_ORDER:
-        c = global_role_counts.get(r, 0)
-        if c:
-            print(f"  {r}: {c}")
-    for r, c in sorted(global_role_counts.items()):
-        if r not in ROLE_LABEL_ORDER:
-            print(f"  {r}: {c}")
+    for basis in basis_order:
+        print(f"  Basis={basis}")
+        basis_counts = global_role_counts_by_basis[basis]
+        for r in ROLE_LABEL_ORDER:
+            c = basis_counts.get(r, 0)
+            if c:
+                print(f"    {r}: {c}")
+        for r, c in sorted(basis_counts.items()):
+            if r not in ROLE_LABEL_ORDER:
+                print(f"    {r}: {c}")
 
     print(f"\nTotal latents profiled: {total_features}")
     print(f"Wrote summary: {summary_path}")
