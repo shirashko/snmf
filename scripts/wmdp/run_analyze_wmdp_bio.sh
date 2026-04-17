@@ -12,15 +12,16 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=80G
 
-# WMDP-bio pipeline: analyze SNMF factors (see scripts/wmdp/train_snmf.sh).
-#   scripts/wmdp/train_snmf.sh  ->  RESULTS_DIR/layer_*/snmf_factors.pt
-#   this script    ->  wmdp_bio_analyze_snmf_results.py -> *_wmdp_bio.json + SUMMARY_FILE
+# WMDP-bio pipeline: analyze SNMF factors (pair with scripts/wmdp/train_snmf.sh).
+#   train_snmf.sh  ->  OUTPUT_DIR/layer_*/snmf_factors.pt
+#   this script      ->  wmdp_bio_analyze_snmf_results.py -> *_wmdp_bio.json + SUMMARY_FILE
+# Defaults below match train_snmf.sh (MODEL_PATH, DATA_PATH, OUTPUT_DIR, SEED, DEVICE).
 
 set -euo pipefail
 
-# --- Environment Setup ---
+# --- Environment Setup (same as train_snmf.sh) ---
 source /home/morg/students/rashkovits/miniconda3/etc/profile.d/conda.sh
-conda activate snmf_env
+conda activate /home/morg/students/rashkovits/envs/snmf_env
 
 # --- Space & Cache Management (same pattern as run_evaluate_wmdp_bio.sh) ---
 export HF_HOME="${HF_HOME:-/home/morg/students/rashkovits/hf_cache}"
@@ -34,13 +35,17 @@ export PYTHONPATH="${PYTHONPATH:-}:$(pwd)"
 
 mkdir -p logs "$HF_HOME"
 
-# --- Analysis I/O (match scripts/wmdp/train_snmf.sh defaults for WMDP-bio + Gemma-2-2b) ---
+# --- Analysis I/O (defaults aligned with scripts/wmdp/train_snmf.sh) ---
 MODEL_PATH="${MODEL_PATH:-/home/morg/students/rashkovits/Localized-UNDO/models/wmdp/gemma-2-2b}"
-DATA_PATH="${DATA_PATH:-data/bio_data.json}"
-RESULTS_DIR="${RESULTS_DIR:-outputs/snmf_train_results_wmdp_bio_gemma2_2b}"
+DATA_PATH="${DATA_PATH:-data/bio_data_part1.json}"
+OUTPUT_DIR="${OUTPUT_DIR:-outputs/wmdp/results_data_part1_gemma2_2b}"
+RESULTS_DIR="${RESULTS_DIR:-$OUTPUT_DIR}"
 SUMMARY_FILE="${SUMMARY_FILE:-analysis_summary_wmdp_bio.json}"
-ANALYZE_DEVICE="${ANALYZE_DEVICE:-cuda}"
-ANALYZE_SEED="${ANALYZE_SEED:-42}"
+SEED="${SEED:-${ANALYZE_SEED:-42}}"
+DEVICE="${DEVICE:-${ANALYZE_DEVICE:-cuda}}"
+ROLE_ASSIGNMENT_THRESHOLD="${ROLE_ASSIGNMENT_THRESHOLD:-0.05}"
+ACTIVATION_CONTEXT_TOP_N="${ACTIVATION_CONTEXT_TOP_N:-10}"
+ACTIVATION_CONTEXT_WINDOW="${ACTIVATION_CONTEXT_WINDOW:-15}"
 REQUIRE_GPU="${REQUIRE_GPU:-1}"   # 1 => fail fast if CUDA GPU is not usable
 
 # --- Parallelism Optimization ---
@@ -48,7 +53,7 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
 
 # --- GPU Preflight ---
-if [[ "$REQUIRE_GPU" == "1" && "$ANALYZE_DEVICE" == cuda* ]]; then
+if [[ "$REQUIRE_GPU" == "1" && "$DEVICE" == cuda* ]]; then
   if ! command -v nvidia-smi >/dev/null 2>&1; then
     echo "[run_analyze_wmdp_bio.sh] REQUIRE_GPU=1 but nvidia-smi is unavailable."
     exit 1
@@ -73,12 +78,13 @@ fi
 
 # --- Execute Analysis ---
 echo "--------------------------------------------------------"
-echo "WMDP-bio SNMF analysis (bio_data.json supervision) on Node: ${SLURMD_NODENAME:-local}"
+echo "WMDP-bio SNMF analysis on Node: ${SLURMD_NODENAME:-local}"
 echo "Model path: $MODEL_PATH"
 echo "Training data file (for traceability): $DATA_PATH"
-echo "Results directory (SNMF train output): $RESULTS_DIR"
+echo "Results directory (train --output-dir): $RESULTS_DIR"
 echo "Per-run summary: $RESULTS_DIR/$SUMMARY_FILE"
-echo "Analyze device: $ANALYZE_DEVICE"
+echo "Device: $DEVICE  Seed: $SEED"
+echo "Role threshold: $ROLE_ASSIGNMENT_THRESHOLD"
 if command -v nvidia-smi >/dev/null 2>&1; then
   echo "Visible GPUs:"
   nvidia-smi -L || true
@@ -90,11 +96,11 @@ python wmdp_bio_analyze_snmf_results.py \
   --results-dir "$RESULTS_DIR" \
   --summary-filename "$SUMMARY_FILE" \
   --data-path "$DATA_PATH" \
-  --role-assignment-threshold 0.05 \
-  --device "$ANALYZE_DEVICE" \
-  --seed "$ANALYZE_SEED" \
-  --activation-context-top-n 10 \
-  --activation-context-window 15
+  --role-assignment-threshold "$ROLE_ASSIGNMENT_THRESHOLD" \
+  --device "$DEVICE" \
+  --seed "$SEED" \
+  --activation-context-top-n "$ACTIVATION_CONTEXT_TOP_N" \
+  --activation-context-window "$ACTIVATION_CONTEXT_WINDOW"
 
 echo "--------------------------------------------------------"
 echo "WMDP-bio SNMF analysis finished"
