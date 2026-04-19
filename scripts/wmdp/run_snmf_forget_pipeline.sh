@@ -88,6 +88,9 @@ SKIP_EVAL="${SKIP_EVAL:-0}"
 RANDOM_BASELINE="${RANDOM_BASELINE:-1}"
 DOWN_PROJ_ONLY="${DOWN_PROJ_ONLY:-0}"
 FORGET_ROLES="${FORGET_ROLES:-bio_forget_lean}"
+# Optional WMDP-bio: space-separated bases (pooled neutral bio_retain); unset = legacy role_label.
+ROLE_LABEL_BASES="${ROLE_LABEL_BASES:-}"
+ROLE_BASIS_COMBINE="${ROLE_BASIS_COMBINE:-all}"
 
 SKIP_TRAIN="${SKIP_TRAIN:-0}"
 SKIP_ANALYZE="${SKIP_ANALYZE:-0}"
@@ -179,12 +182,19 @@ if [[ "$DOWN_PROJ_ONLY" == "1" ]]; then
   DOWN_ONLY_ARGS+=(--down-proj-only)
 fi
 
+BASIS_ARGS=()
+if [[ -n "$ROLE_LABEL_BASES" ]]; then
+  # shellcheck disable=SC2206
+  BASIS_ARGS=(--role-label-bases $ROLE_LABEL_BASES --role-basis-combine "$ROLE_BASIS_COMBINE")
+fi
+
 python create_forget_ablated_model.py \
   --model-path "$MODEL_PATH" \
   --results-dir "$SNMF_OUTPUT_DIR" \
   --supervised-json-filename "$SUPERVISED_JSON_FILENAME" \
   --save-path "$SAVE_PATH" \
   --forget-roles $FORGET_ROLES \
+  "${BASIS_ARGS[@]}" \
   --ridge-lambda "$RIDGE_LAMBDA" \
   --device "$ABLATION_DEVICE" \
   --eval-device "$EVAL_DEVICE" \

@@ -38,7 +38,7 @@ mkdir -p logs "$HF_HOME"
 # --- Analysis I/O (defaults aligned with scripts/wmdp/train_snmf.sh) ---
 MODEL_PATH="${MODEL_PATH:-/home/morg/students/rashkovits/Localized-UNDO/models/wmdp/gemma-2-2b}"
 DATA_PATH="${DATA_PATH:-data/bio_data_part1.json}"
-OUTPUT_DIR="${OUTPUT_DIR:-outputs/wmdp/results_data_part1_gemma2_2b}"
+OUTPUT_DIR="${OUTPUT_DIR:-outputs/wmdp/results_data_part1_gemma2_2b_450_rank}"
 RESULTS_DIR="${RESULTS_DIR:-$OUTPUT_DIR}"
 SUMMARY_FILE="${SUMMARY_FILE:-analysis_summary_wmdp_bio.json}"
 SEED="${SEED:-${ANALYZE_SEED:-42}}"

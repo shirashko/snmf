@@ -347,6 +347,8 @@ def eval_model_lm_eval(
     if print_results:
         print_acc(f"[validation_functions.py] Validation Results:", accelerator.is_main_process)
         for key, value in eval_dict.items():
+            if key == "total time" or key.endswith(" time"):
+                continue
             print(f"[validation_functions.py] \t{key}: {value}")
 
     return eval_dict

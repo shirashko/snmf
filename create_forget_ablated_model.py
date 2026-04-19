@@ -6,9 +6,12 @@ Expected pipeline (matches the repo shell scripts):
   1. ``scripts/wmdp/train_snmf.sh`` → writes ``outputs/snmf_train_results/layer_*/snmf_factors.pt``
      with ``mode=mlp_intermediate`` (required: ``F`` lives in the same space as
      ``mlp.down_proj`` input).
-  2. ``scripts/arith/run_analyze_snmf_results.sh`` → writes ``layer_*/feature_analysis_supervised.json``
-     (``role_label`` per latent, from ``analyze_snmf_results.py``).
-  3. This script → reads ``F`` + ``role_label``, applies projections on MLP weights, saves a new model.
+  2. Analysis → per-layer supervised JSON (e.g. ``feature_analysis_supervised.json`` or
+     ``feature_analysis_supervised_wmdp_bio.json``). WMDP-bio files include ``role_labels_by_basis``
+     (pooled / neutral / bio_retain); use ``--role-label-bases`` + ``--role-basis-combine`` to decide
+     which bases must agree before a latent counts as a forget direction. If those flags are omitted,
+     the legacy top-level ``role_label`` field is used (matches older arithmetic runs).
+  3. This script → reads ``F`` + role selection, applies projections on MLP weights, saves a new model.
 
 Use the **same** ``--model-path`` as training/analysis and the **same** ``--results-dir``
 as ``--output-dir`` / ``RESULTS_DIR`` (default: ``outputs/snmf_train_results``).
@@ -37,7 +40,7 @@ import argparse
 import gc
 import json
 from pathlib import Path
-from typing import Any, Dict, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 import torch
 
@@ -48,6 +51,17 @@ from llm_utils.utils import resolve_device, sorted_numeric_layer_dirs
 EVAL_ENG_VALID_FILE = "/home/morg/students/rashkovits/Localized-UNDO/datasets/pretrain/valid_eng.jsonl"
 EVAL_MAX_LENGTH = 256
 CACHE_DIR = "./cache"
+
+# WMDP-bio supervised JSON uses role_labels_by_basis (pooled / neutral / bio_retain).
+ROLE_LABEL_BASIS_CHOICES = frozenset({"pooled", "neutral", "bio_retain"})
+
+# basis -> (log_ratio key in profile["log_ratios"], group key in profile["group_{means,counts}"]).
+# Mirrors wmdp_bio_supervised_analysis.analyze_features_supervised_wmdp_bio.
+_BASIS_TO_STATS_KEYS: Dict[str, tuple[str, str]] = {
+    "pooled": ("log_forget_vs_pooled_retain", "pooled_retain"),
+    "neutral": ("log_forget_vs_neutral", "neutral"),
+    "bio_retain": ("log_forget_vs_bio_retain", "bio_retain"),
+}
 
 
 def _gc_and_empty_cuda() -> None:
@@ -74,22 +88,132 @@ def _run_standalone_eval_for_args(model_path: str, args: argparse.Namespace) -> 
     )
 
 
-def _load_role_map(layer_dir: Path, supervised_json_filename: str) -> Dict[int, str]:
+def _role_labels_by_basis_from_profile(profile: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Normalize to a dict basis -> role string.
+    Legacy JSON (arithmetic): only ``role_label`` → treated as pooled.
+    WMDP-bio JSON: ``role_labels_by_basis``; ``role_label`` is pooled-compatible alias.
+    """
+    by_basis = profile.get("role_labels_by_basis")
+    if isinstance(by_basis, dict) and by_basis:
+        out: Dict[str, str] = {str(k): str(v) for k, v in by_basis.items()}
+        if "pooled" not in out and profile.get("role_label") is not None:
+            out["pooled"] = str(profile["role_label"])
+        return out
+    rl = str(profile.get("role_label", "unknown"))
+    return {"pooled": rl}
+
+
+def _assign_role_label_bio(
+    log_forget_vs_retain: float,
+    mean_forget: float,
+    mean_retain: float,
+    n_forget: int,
+    n_retain: int,
+    min_log_ratio: float,
+) -> str:
+    """Mirror of wmdp_bio_supervised_analysis._assign_role_label_bio (kept local to avoid import)."""
+    if n_forget == 0 or n_retain == 0:
+        return "insufficient_groups"
+    total = mean_forget + mean_retain
+    if total < 1e-9:
+        return "low_signal"
+    if log_forget_vs_retain >= min_log_ratio:
+        return "bio_forget_lean"
+    if log_forget_vs_retain <= -min_log_ratio:
+        return "retain_lean"
+    return "weak_mixed"
+
+
+def _recompute_role_labels_by_basis(
+    profile: Dict[str, Any],
+    threshold: float,
+) -> Dict[str, str]:
+    """
+    Recompute the per-basis role label from the raw stats stored in the WMDP-bio supervised JSON
+    (group_means, group_counts, log_ratios), using ``threshold`` instead of the value used at
+    analysis time. Falls back to ``insufficient_groups`` when the required fields are missing.
+    """
+    log_ratios = profile.get("log_ratios") or {}
+    means = profile.get("group_means") or {}
+    counts = profile.get("group_counts") or {}
+    mean_forget = float(means.get("bio_forget", 0.0))
+    n_forget = int(counts.get("bio_forget", 0))
+
+    out: Dict[str, str] = {}
+    for basis, (lr_key, grp_key) in _BASIS_TO_STATS_KEYS.items():
+        log_fr = log_ratios.get(lr_key)
+        n_r = int(counts.get(grp_key, 0))
+        mean_r = float(means.get(grp_key, 0.0))
+        if log_fr is None:
+            out[basis] = "insufficient_groups"
+            continue
+        out[basis] = _assign_role_label_bio(
+            float(log_fr), mean_forget, mean_r, n_forget, n_r, threshold
+        )
+    return out
+
+
+def _latent_matches_forget_roles(
+    profile: Dict[str, Any],
+    forget_roles: Set[str],
+    role_label_bases: Optional[Sequence[str]],
+    role_basis_combine: str,
+    role_assignment_threshold: Optional[float] = None,
+) -> bool:
+    """
+    If ``role_label_bases`` is None or empty, match legacy top-level ``role_label`` only.
+    Otherwise require forget-role membership per listed basis, combined with all/any.
+    If ``role_assignment_threshold`` is given, labels are recomputed from the raw stats in
+    ``profile`` (log_ratios / group_means / group_counts) rather than read from the stored
+    ``role_labels_by_basis`` (which used the threshold fixed at analysis time).
+    """
+    if not role_label_bases:
+        return str(profile.get("role_label", "unknown")) in forget_roles
+
+    if role_assignment_threshold is not None:
+        labels = _recompute_role_labels_by_basis(profile, role_assignment_threshold)
+    else:
+        labels = _role_labels_by_basis_from_profile(profile)
+    checks: List[bool] = []
+    for b in role_label_bases:
+        if b not in ROLE_LABEL_BASIS_CHOICES:
+            raise ValueError(
+                f"Unknown role-label basis {b!r}; expected one of {sorted(ROLE_LABEL_BASIS_CHOICES)}"
+            )
+        if b not in labels:
+            raise KeyError(
+                f"Supervised profile missing basis {b!r} in role_labels_by_basis "
+                f"(have keys: {sorted(labels.keys())}). Re-run WMDP-bio analysis or use fewer bases."
+            )
+        checks.append(labels[b] in forget_roles)
+
+    if role_basis_combine == "all":
+        return all(checks)
+    if role_basis_combine == "any":
+        return any(checks)
+    raise ValueError(f"role_basis_combine must be 'all' or 'any', got {role_basis_combine!r}")
+
+
+def _load_supervised_profiles(layer_dir: Path, supervised_json_filename: str) -> Dict[int, Dict[str, Any]]:
     path = layer_dir / supervised_json_filename
     if not path.exists():
         raise FileNotFoundError(
-            f"Missing {path}. Run analyze_snmf_results.py on --results-dir first "
-            f"(e.g. scripts/arith/run_analyze_snmf_results.sh) so each layer has role_label entries."
+            f"Missing {path}. Run analysis on --results-dir first so each layer has supervised "
+            f"role entries (e.g. feature_analysis_supervised_wmdp_bio.json)."
         )
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
-    return {int(k): str(v.get("role_label", "unknown")) for k, v in raw.items()}
+    return {int(k): v for k, v in raw.items() if isinstance(v, dict)}
 
 
 def _forget_feature_matrix(
     layer_dir: Path,
     forget_roles: Set[str],
     supervised_json_filename: str,
+    role_label_bases: Optional[Sequence[str]],
+    role_basis_combine: str,
+    role_assignment_threshold: Optional[float] = None,
 ) -> torch.Tensor | None:
     """Returns Z of shape (d_mlp, k) with columns z_i from F, or None if nothing to remove."""
     ckpt_path = layer_dir / "snmf_factors.pt"
@@ -107,9 +231,21 @@ def _forget_feature_matrix(
     if F.ndim != 2:
         raise ValueError(f"Unexpected F shape in {ckpt_path}: {tuple(F.shape)}")
 
-    roles = _load_role_map(layer_dir, supervised_json_filename)
+    profiles = _load_supervised_profiles(layer_dir, supervised_json_filename)
     k_all = F.shape[1]
-    forget_cols = sorted(i for i, r in roles.items() if r in forget_roles and 0 <= i < k_all)
+
+    forget_cols = sorted(
+        i
+        for i, prof in profiles.items()
+        if 0 <= i < k_all
+        and _latent_matches_forget_roles(
+            prof,
+            forget_roles,
+            role_label_bases,
+            role_basis_combine,
+            role_assignment_threshold=role_assignment_threshold,
+        )
+    )
     if not forget_cols:
         return None
     Z = F[:, forget_cols].contiguous()
@@ -195,6 +331,9 @@ def _apply_ablation_to_model(
     random_baseline: bool,
     random_seed: int,
     *,
+    role_label_bases: Optional[Sequence[str]] = None,
+    role_basis_combine: str = "all",
+    role_assignment_threshold: Optional[float] = None,
     span_projection_scale: float = 1.0,
     down_proj_only: bool = False,
 ) -> tuple[object, Dict[str, object]]:
@@ -207,10 +346,23 @@ def _apply_ablation_to_model(
     base = getattr(model, "model", model)
     d_mlp = local.d_mlp
 
+    bases_norm: Optional[List[str]] = None
+    if role_label_bases is not None:
+        bases_norm = [str(b).strip() for b in role_label_bases if str(b).strip()]
+        if not bases_norm:
+            bases_norm = None
+
     meta: Dict[str, object] = {
         "model_path": model_path,
         "results_dir": str(results_dir),
         "forget_roles": sorted(forget_roles),
+        "role_label_bases": bases_norm,
+        "role_basis_combine": role_basis_combine if bases_norm else None,
+        "role_assignment_threshold": (
+            float(role_assignment_threshold)
+            if role_assignment_threshold is not None
+            else None
+        ),
         "supervised_json_filename": supervised_json_filename,
         "ridge_lambda": ridge_lambda,
         "span_projection_scale": float(span_projection_scale),
@@ -221,7 +373,14 @@ def _apply_ablation_to_model(
     }
 
     for _layer_num, layer_dir in sorted_numeric_layer_dirs(results_dir):
-        Z_learned = _forget_feature_matrix(layer_dir, forget_roles, supervised_json_filename)
+        Z_learned = _forget_feature_matrix(
+            layer_dir,
+            forget_roles,
+            supervised_json_filename,
+            role_label_bases=bases_norm,
+            role_basis_combine=role_basis_combine,
+            role_assignment_threshold=role_assignment_threshold,
+        )
         if Z_learned is None:
             continue
 
@@ -296,7 +455,12 @@ def _apply_ablation_to_model(
 
     if not meta["layers"]:
         raise RuntimeError(
-            f"No forget features found under {results_dir} for roles={sorted(forget_roles)}."
+            f"No forget features found under {results_dir} for roles={sorted(forget_roles)}"
+            + (
+                f" (bases={bases_norm!r}, combine={role_basis_combine!r})."
+                if bases_norm
+                else " (using top-level role_label only)."
+            )
         )
     return local, meta
 
@@ -339,6 +503,38 @@ def parse_args() -> argparse.Namespace:
         type=str,
         nargs="+",
         default=["mult_forget", "div_forget", "forget_mixed"],
+    )
+    p.add_argument(
+        "--role-label-bases",
+        type=str,
+        nargs="*",
+        default=None,
+        metavar="BASIS",
+        help=(
+            "WMDP-bio only: which supervised bases to read from each latent's role_labels_by_basis "
+            "(pooled | neutral | bio_retain). Example: --role-label-bases pooled bio_retain "
+            "--role-basis-combine all targets latents labeled forget on every listed basis. "
+            "Omit this flag to use legacy top-level role_label only (arithmetic JSONs)."
+        ),
+    )
+    p.add_argument(
+        "--role-basis-combine",
+        type=str,
+        default="all",
+        choices=["all", "any"],
+        help="How to combine --role-label-bases: 'all' (AND) or 'any' (OR). Ignored when bases omitted.",
+    )
+    p.add_argument(
+        "--role-assignment-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Optional WMDP-bio threshold (min |log_forget_vs_retain|) used to recompute per-basis "
+            "role labels on-the-fly from the raw stats in each supervised JSON profile "
+            "(log_ratios / group_means / group_counts). When omitted, the stored "
+            "role_labels_by_basis (baked at analysis time, default threshold 0.15) is used. "
+            "Only affects selection when --role-label-bases is also set."
+        ),
     )
     p.add_argument(
         "--supervised-json-filename",
@@ -389,6 +585,12 @@ def parse_args() -> argparse.Namespace:
         "--skip-eval",
         action="store_true",
         help="Do not run evaluation/eveluate_model.py before/after ablation.",
+    )
+    p.add_argument(
+        "--skip-pre-eval",
+        action="store_true",
+        help="Skip only the baseline (pre-ablation) eval of the original model; still run "
+        "the post-ablation eval(s). Useful when the original model's metrics are already known.",
     )
     p.add_argument(
         "--eval-device",
@@ -444,14 +646,20 @@ def main() -> None:
     args = parse_args()
     results_dir = Path(args.results_dir)
     forget_roles = set(args.forget_roles)
+    if args.role_label_bases is None:
+        role_label_bases: Optional[List[str]] = None
+    else:
+        role_label_bases = [str(b).strip() for b in args.role_label_bases if str(b).strip()] or None
 
     results_before: Dict[str, Any] | None = None
     results_after: Dict[str, Any] | None = None
 
-    if not args.skip_eval:
+    if not args.skip_eval and not args.skip_pre_eval:
         print("\n=== Baseline eval (original model, before ablation) ===")
         results_before = _run_standalone_eval_for_args(args.model_path, args)
         _gc_and_empty_cuda()
+    elif not args.skip_eval and args.skip_pre_eval:
+        print("\n=== Skipping baseline eval (--skip-pre-eval set); post-ablation eval will still run ===")
 
     ablation_device = resolve_device(args.device)
     print(f"Ablation model load device (after resolve): {ablation_device}")
@@ -464,6 +672,9 @@ def main() -> None:
         device=ablation_device,
         random_baseline=False,
         random_seed=args.random_seed,
+        role_label_bases=role_label_bases,
+        role_basis_combine=args.role_basis_combine,
+        role_assignment_threshold=args.role_assignment_threshold,
         span_projection_scale=args.span_projection_scale,
         down_proj_only=args.down_proj_only,
     )
@@ -487,15 +698,18 @@ def main() -> None:
     if not args.skip_eval:
         print("\n=== Post-ablation eval (saved checkpoint) ===")
         results_after = _run_standalone_eval_for_args(str(save_path), args)
-        assert results_before is not None
-        _print_eval_comparison(results_before, results_after)
+        if results_before is not None:
+            _print_eval_comparison(results_before, results_after)
+        else:
+            print("\n=== Post-ablation eval (no baseline; --skip-pre-eval was set) ===")
+            _print_eval_comparison({}, results_after)
 
         eval_out = save_path / "ablation_eval_comparison.json"
         eval_out.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "baseline_model_path": args.model_path,
             "ablated_model_path": str(save_path),
-            "before": _summarize_eval(results_before),
+            "before": _summarize_eval(results_before) if results_before is not None else None,
             "after": _summarize_eval(results_after),
         }
         with open(eval_out, "w", encoding="utf-8") as f:
@@ -513,6 +727,9 @@ def main() -> None:
             device=ablation_device,
             random_baseline=True,
             random_seed=args.random_seed,
+            role_label_bases=role_label_bases,
+            role_basis_combine=args.role_basis_combine,
+            role_assignment_threshold=args.role_assignment_threshold,
             span_projection_scale=args.span_projection_scale,
             down_proj_only=args.down_proj_only,
         )
@@ -532,11 +749,14 @@ def main() -> None:
         if not args.skip_eval:
             print("\n=== Post-random-baseline eval (saved checkpoint) ===")
             results_random = _run_standalone_eval_for_args(str(save_path_random), args)
-            assert results_before is not None and results_after is not None
+            assert results_after is not None
             print("\n--- Learned-direction ablation vs random baseline ---")
             _print_eval_comparison(results_after, results_random)
-            print("\n--- Original baseline vs random baseline ---")
-            _print_eval_comparison(results_before, results_random)
+            if results_before is not None:
+                print("\n--- Original baseline vs random baseline ---")
+                _print_eval_comparison(results_before, results_random)
+            else:
+                print("\n--- Skipping 'original baseline vs random baseline' (--skip-pre-eval was set) ---")
 
             payload["random_baseline"] = {
                 "random_seed": int(args.random_seed),
