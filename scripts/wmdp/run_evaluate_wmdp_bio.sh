@@ -33,7 +33,10 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 
 # --- Config (override by exporting before sbatch/bash) ---
-MODEL_PATH="${MODEL_PATH:-/home/morg/students/rashkovits/Localized-UNDO/models/wmdp/gemma-2-2b}"
+# Default model is the iter-2 + top-up variant-A ckpt (the only iter-2 top-up that kept
+# MMLU intact; wmdp_bio=0.4273, mmlu=0.4837 on stock wmdp_bio). Re-eval this ckpt on
+# wmdp_bio_robust + MMLU gives the apples-to-apples baseline for iter-3 comparisons.
+MODEL_PATH="${MODEL_PATH:-/home/morg/students/rashkovits/snmf/local_models/wmdp/iter2_topup_data_part2_thr018_both_up_down/bio_retain_and_neutral}"
 EVAL_MODE="${EVAL_MODE:-wmdp_bio_categorized}"  # wmdp_bio | wmdp_bio_categorized
 DEVICE="${DEVICE:-cuda}"
 CACHE_DIR="${CACHE_DIR:-./cache}"
@@ -41,7 +44,8 @@ DATASET_CACHE_DIR="${DATASET_CACHE_DIR:-./cache}"
 # Default to full WMDP-bio test evaluation.
 # Set LARGE_EVAL=0 for a quicker subset run.
 LARGE_EVAL="${LARGE_EVAL:-1}"   # 1 -> --large-eval (full WMDP-bio)
-NO_MMLU="${NO_MMLU:-1}"         # 1 -> --no-mmlu (WMDP-bio only)
+# Keep MMLU on by default — we always want the preservation metric alongside WMDP-bio.
+NO_MMLU="${NO_MMLU:-0}"         # 1 -> --no-mmlu (WMDP-bio only)
 WMDP_INCLUDE_PATH="${WMDP_INCLUDE_PATH:-/home/morg/students/rashkovits/snmf/wmdp_bio_categorized_mcqa}"
 WMDP_TASK_NAME="${WMDP_TASK_NAME:-wmdp_bio_robust}"  # robust by default; or wmdp_bio_shortcut / wmdp_bio_categorized_mcqa
 RESULTS_JSON="${RESULTS_JSON:-outputs/eval_results/wmdp_bio_${SLURM_JOB_ID:-local}.json}"

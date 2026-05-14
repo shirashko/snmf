@@ -63,6 +63,15 @@ _BASIS_TO_STATS_KEYS: Dict[str, tuple[str, str]] = {
     "bio_retain": ("log_forget_vs_bio_retain", "bio_retain"),
 }
 
+# Latent-selection strategies used by --selection-mode.
+#   log_ratio  : legacy unary log-ratio role_labels_by_basis (with --role-label-bases + --role-basis-combine).
+#   probe_topk : top-K latents per layer by signed L1-logistic probe weight (positive = forget-predictive).
+#                Requires per-layer probe_weights_wmdp_bio.json (see wmdp_bio_probe_snmf_results.py).
+#   intersect  : intersection of the two — a latent must pass BOTH the log-ratio rule AND be in the probe top-K.
+#                This preserves the specificity filter of AND(bio_retain, neutral) while adding the multivariate
+#                joint-decoding signal.
+SELECTION_MODE_CHOICES = frozenset({"log_ratio", "probe_topk", "intersect"})
+
 
 def _gc_and_empty_cuda() -> None:
     gc.collect()
@@ -207,6 +216,101 @@ def _load_supervised_profiles(layer_dir: Path, supervised_json_filename: str) ->
     return {int(k): v for k, v in raw.items() if isinstance(v, dict)}
 
 
+def _load_probe_weights(layer_dir: Path, probe_weights_filename: str) -> Optional[Dict[int, float]]:
+    """
+    Load per-latent L1-logistic probe weights from ``layer_dir/<probe_weights_filename>``.
+
+    Returns {latent_index: weight} or None when the file is missing (probe step wasn't run
+    for this layer). Missing probe files should prevent ``probe_topk`` / ``intersect`` modes
+    from being used silently — callers raise on None.
+    """
+    path = layer_dir / probe_weights_filename
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        doc = json.load(f)
+    weights = doc.get("weights_by_latent") or {}
+    return {int(k): float(v) for k, v in weights.items()}
+
+
+def _probe_top_k_cols(weights: Dict[int, float], top_k: int, k_all: int) -> List[int]:
+    """
+    Return up to ``top_k`` latent indices with the highest *positive* probe weight.
+
+    A latent with w_i > 0 is predictive of ``bio_forget`` (when features are standardized,
+    which the probe script enforces). Indices out of range [0, k_all) are dropped. Ties are
+    broken by latent index ascending (deterministic).
+    """
+    cand = [
+        (i, w) for i, w in weights.items()
+        if 0 <= i < k_all and w > 0.0
+    ]
+    cand.sort(key=lambda t: (-t[1], t[0]))
+    return sorted(i for i, _ in cand[: max(0, int(top_k))])
+
+
+def _select_forget_cols(
+    layer_dir: Path,
+    selection_mode: str,
+    *,
+    forget_roles: Set[str],
+    supervised_json_filename: str,
+    role_label_bases: Optional[Sequence[str]],
+    role_basis_combine: str,
+    role_assignment_threshold: Optional[float],
+    probe_weights_filename: str,
+    probe_top_k: int,
+    k_all: int,
+) -> List[int]:
+    """
+    Pick the per-layer forget-column indices, dispatching on ``selection_mode``.
+
+    - ``log_ratio`` : classic per-basis ``role_labels_by_basis`` rule (see _latent_matches_forget_roles).
+    - ``probe_topk``: top-K latents by positive probe weight; ignores role labels entirely.
+    - ``intersect`` : intersection of the two — latent must satisfy BOTH, preserving the
+                      AND(bio_retain, neutral) specificity filter while adding the
+                      multivariate signal of the probe.
+    """
+    if selection_mode not in SELECTION_MODE_CHOICES:
+        raise ValueError(
+            f"selection_mode={selection_mode!r} not in {sorted(SELECTION_MODE_CHOICES)}"
+        )
+
+    if selection_mode in ("log_ratio", "intersect"):
+        profiles = _load_supervised_profiles(layer_dir, supervised_json_filename)
+        log_ratio_cols = sorted(
+            i
+            for i, prof in profiles.items()
+            if 0 <= i < k_all
+            and _latent_matches_forget_roles(
+                prof,
+                forget_roles,
+                role_label_bases,
+                role_basis_combine,
+                role_assignment_threshold=role_assignment_threshold,
+            )
+        )
+    else:
+        log_ratio_cols = []
+
+    if selection_mode == "log_ratio":
+        return log_ratio_cols
+
+    weights = _load_probe_weights(layer_dir, probe_weights_filename)
+    if weights is None:
+        raise FileNotFoundError(
+            f"selection_mode={selection_mode!r} requires {probe_weights_filename} in "
+            f"{layer_dir}. Run wmdp_bio_probe_snmf_results.py on this SNMF dir first."
+        )
+    probe_cols = _probe_top_k_cols(weights, top_k=probe_top_k, k_all=k_all)
+
+    if selection_mode == "probe_topk":
+        return probe_cols
+    # intersect
+    probe_set = set(probe_cols)
+    return sorted(i for i in log_ratio_cols if i in probe_set)
+
+
 def _forget_feature_matrix(
     layer_dir: Path,
     forget_roles: Set[str],
@@ -214,6 +318,10 @@ def _forget_feature_matrix(
     role_label_bases: Optional[Sequence[str]],
     role_basis_combine: str,
     role_assignment_threshold: Optional[float] = None,
+    *,
+    selection_mode: str = "log_ratio",
+    probe_weights_filename: str = "probe_weights_wmdp_bio.json",
+    probe_top_k: int = 5,
 ) -> torch.Tensor | None:
     """Returns Z of shape (d_mlp, k) with columns z_i from F, or None if nothing to remove."""
     ckpt_path = layer_dir / "snmf_factors.pt"
@@ -231,20 +339,18 @@ def _forget_feature_matrix(
     if F.ndim != 2:
         raise ValueError(f"Unexpected F shape in {ckpt_path}: {tuple(F.shape)}")
 
-    profiles = _load_supervised_profiles(layer_dir, supervised_json_filename)
     k_all = F.shape[1]
-
-    forget_cols = sorted(
-        i
-        for i, prof in profiles.items()
-        if 0 <= i < k_all
-        and _latent_matches_forget_roles(
-            prof,
-            forget_roles,
-            role_label_bases,
-            role_basis_combine,
-            role_assignment_threshold=role_assignment_threshold,
-        )
+    forget_cols = _select_forget_cols(
+        layer_dir,
+        selection_mode=selection_mode,
+        forget_roles=forget_roles,
+        supervised_json_filename=supervised_json_filename,
+        role_label_bases=role_label_bases,
+        role_basis_combine=role_basis_combine,
+        role_assignment_threshold=role_assignment_threshold,
+        probe_weights_filename=probe_weights_filename,
+        probe_top_k=probe_top_k,
+        k_all=k_all,
     )
     if not forget_cols:
         return None
@@ -336,6 +442,9 @@ def _apply_ablation_to_model(
     role_assignment_threshold: Optional[float] = None,
     span_projection_scale: float = 1.0,
     down_proj_only: bool = False,
+    selection_mode: str = "log_ratio",
+    probe_weights_filename: str = "probe_weights_wmdp_bio.json",
+    probe_top_k: int = 5,
 ) -> tuple[object, Dict[str, object]]:
     """
     Load model, apply either learned-direction or random-direction ablation.
@@ -369,6 +478,9 @@ def _apply_ablation_to_model(
         "ablation_type": "random_matched_count" if random_baseline else "learned_forget_directions",
         "random_seed": int(random_seed) if random_baseline else None,
         "down_proj_only": bool(down_proj_only),
+        "selection_mode": str(selection_mode),
+        "probe_weights_filename": probe_weights_filename if selection_mode != "log_ratio" else None,
+        "probe_top_k": int(probe_top_k) if selection_mode != "log_ratio" else None,
         "layers": [],
     }
 
@@ -380,6 +492,9 @@ def _apply_ablation_to_model(
             role_label_bases=bases_norm,
             role_basis_combine=role_basis_combine,
             role_assignment_threshold=role_assignment_threshold,
+            selection_mode=selection_mode,
+            probe_weights_filename=probe_weights_filename,
+            probe_top_k=probe_top_k,
         )
         if Z_learned is None:
             continue
@@ -639,6 +754,33 @@ def parse_args() -> argparse.Namespace:
         help="Only ablate down_proj (W_V @ P_perp). Skip gate_proj/up_proj for ablations that "
         "match the old single-sided behavior.",
     )
+    p.add_argument(
+        "--selection-mode",
+        type=str,
+        default="log_ratio",
+        choices=sorted(SELECTION_MODE_CHOICES),
+        help=(
+            "How to pick forget columns per layer: "
+            "'log_ratio' = classic role_labels_by_basis rule (existing behavior); "
+            "'probe_topk' = top-K latents by positive L1-logistic probe weight "
+            "(requires running wmdp_bio_probe_snmf_results.py first to produce "
+            "layer_*/probe_weights_wmdp_bio.json); "
+            "'intersect' = log_ratio ∩ probe_topk (preserves specificity filters, "
+            "adds multivariate decoding signal)."
+        ),
+    )
+    p.add_argument(
+        "--probe-weights-filename",
+        type=str,
+        default="probe_weights_wmdp_bio.json",
+        help="Per-layer probe-weights JSON used by --selection-mode probe_topk/intersect.",
+    )
+    p.add_argument(
+        "--probe-top-k",
+        type=int,
+        default=5,
+        help="Per-layer K for --selection-mode probe_topk/intersect (positive weights only).",
+    )
     return p.parse_args()
 
 
@@ -677,6 +819,9 @@ def main() -> None:
         role_assignment_threshold=args.role_assignment_threshold,
         span_projection_scale=args.span_projection_scale,
         down_proj_only=args.down_proj_only,
+        selection_mode=args.selection_mode,
+        probe_weights_filename=args.probe_weights_filename,
+        probe_top_k=args.probe_top_k,
     )
 
     save_path = Path(args.save_path)
@@ -732,6 +877,9 @@ def main() -> None:
             role_assignment_threshold=args.role_assignment_threshold,
             span_projection_scale=args.span_projection_scale,
             down_proj_only=args.down_proj_only,
+            selection_mode=args.selection_mode,
+            probe_weights_filename=args.probe_weights_filename,
+            probe_top_k=args.probe_top_k,
         )
         save_path_random = (
             Path(args.save_path_random)

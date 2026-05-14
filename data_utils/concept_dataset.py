@@ -88,14 +88,35 @@ class SupervisedConceptDataset:
                 df = df.dropna(subset=['text', 'label'])
                 self.data = list(zip(df['text'], df['label']))
             else:
-                # Otherwise, assume the JSON is a dict where keys are labels and values are lists of prompts.
-                # Fall back to using the json module.
+                # Otherwise: dict mapping label -> list[prompt], or a flat list (e.g. label-free audit JSON).
                 with open(self.path, 'r', encoding="utf-8") as f:
                     loaded_data = json.load(f)
-                for label, prompts in loaded_data.items():
-                    for prompt in prompts:
-                        if prompt is not None and label is not None:
-                            self.data.append((prompt, label))
+                _default_label = "unlabeled"
+                if isinstance(loaded_data, dict):
+                    for label, prompts in loaded_data.items():
+                        if not isinstance(prompts, list):
+                            continue
+                        for prompt in prompts:
+                            if prompt is not None and label is not None:
+                                self.data.append((prompt, label))
+                elif isinstance(loaded_data, list):
+                    for item in loaded_data:
+                        if isinstance(item, str) and item.strip():
+                            self.data.append((item, _default_label))
+                        elif isinstance(item, dict):
+                            prompt = item.get("prompt") or item.get("text")
+                            label = item.get("label", _default_label)
+                            if (
+                                prompt is not None
+                                and str(prompt).strip()
+                                and label is not None
+                            ):
+                                self.data.append((str(prompt), str(label)))
+                else:
+                    raise ValueError(
+                        f"Unsupported JSON structure in {self.path}: expected dict, list, or "
+                        f"records with prompt/label columns; got {type(loaded_data).__name__}."
+                    )
     
     def __len__(self):
         return len(self.data)
